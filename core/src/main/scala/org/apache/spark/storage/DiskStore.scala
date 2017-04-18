@@ -25,6 +25,7 @@ import java.nio.charset.StandardCharsets.UTF_8
 import java.util.concurrent.ConcurrentHashMap
 
 import scala.collection.mutable.ListBuffer
+import scala.collection.JavaConverters._
 
 import com.google.common.io.{ByteStreams, Closeables, Files}
 import io.netty.channel.FileRegion
@@ -162,6 +163,8 @@ private[spark] class DiskStore(
         throw e
     }
   }
+
+  def foreachKey(f: BlockId => Unit): Unit = blockSizes.asScala.keys.map(BlockId.apply).foreach(f)
 
 }
 

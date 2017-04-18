@@ -23,6 +23,7 @@ import java.util.LinkedHashMap
 
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
+import scala.collection.JavaConverters._
 import scala.reflect.ClassTag
 
 import com.google.common.io.ByteStreams
@@ -87,7 +88,7 @@ private[spark] class MemoryStore(
   // Note: all changes to memory allocations, notably putting blocks, evicting blocks, and
   // acquiring or releasing unroll memory, must be synchronized on `memoryManager`!
 
-  private val entries = new LinkedHashMap[BlockId, MemoryEntry[_]](32, 0.75f, true)
+  private val entries = new java.util.LinkedHashMap[BlockId, MemoryEntry[_]](32, 0.75f, true)
 
   // A mapping from taskAttemptId to amount of memory used for unrolling a block (in bytes)
   // All accesses of this map are assumed to have manually synchronized on `memoryManager`
@@ -559,6 +560,9 @@ private[spark] class MemoryStore(
       }
     }
   }
+
+  // TODO: this is probably dumb
+  def foreachKey(f: BlockId => Unit): Unit = entries.keySet.asScala.clone.foreach(f)
 
   def contains(blockId: BlockId): Boolean = {
     entries.synchronized { entries.containsKey(blockId) }

@@ -1325,6 +1325,27 @@ class BlockManagerSuite extends SparkFunSuite with Matchers with BeforeAndAfterE
       super.fetchBlockSync(host, port, execId, blockId)
     }
   }
+
+  test("replicate all blocks") {
+    store = makeBlockManager(2000, "exec1")
+    store2 = makeBlockManager(2000, "exec2")
+
+    val a1 = new Array[Byte](400)
+    val a2 = new Array[Byte](400)
+    store.putSingle("a1", a1, StorageLevel.MEMORY_ONLY)
+    store.putSingle("a2", a2, StorageLevel.MEMORY_ONLY)
+
+    store.replicateAllBlocks(Set(store.blockManagerId))
+
+    store.getLocalBytes("a1") shouldBe None
+    store.getLocalBytes("a2") shouldBe None
+
+    // scalastyle:off println
+    store2.get("a1") shouldBe defined
+    store2.get("a2") shouldBe defined
+    // scalastyle:on println
+
+  }
 }
 
 private object BlockManagerSuite {

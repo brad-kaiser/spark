@@ -304,6 +304,7 @@ private[spark] class BlockManager(
    */
   def reregister(): Unit = {
     // TODO: We might need to rate limit re-registering.
+    // TODO: add metrics
     logInfo(s"BlockManager $blockManagerId re-registering with master")
     master.registerBlockManager(blockManagerId, maxOnHeapMemory, maxOffHeapMemory, slaveEndpoint)
     reportAllBlocks()
@@ -1250,6 +1251,25 @@ private[spark] class BlockManager(
         releaseLockAndDispose(blockId, data)
       }
     }
+  }
+
+  /**
+    * Replicate all blocks on this executor
+    *
+    */
+  def replicateAllBlocks(dontReplicateTo: Set[BlockManagerId]): Unit = {
+    // TODO watch out for race conditions with new blocks getting saved
+
+    // TODO the same block id might be in both stores, probably don't want to copy both
+    memoryStore.foreachKey { blockId =>
+      replicateBlock(blockId, dontReplicateTo, 3)
+      removeBlock(blockId)
+    }
+    diskStore.foreachKey { blockId =>
+      replicateBlock(blockId, dontReplicateTo, 3)
+      removeBlock(blockId)
+    }
+
   }
 
   /**
