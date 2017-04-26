@@ -105,6 +105,13 @@ private[spark] class CoarseGrainedExecutorBackend(
         executor.killTask(taskId, interruptThread, reason)
       }
 
+    case ReplicateExecutor(executorIdsToBeRemoved) =>
+      if (executor == null) {
+        exitExecutor(1, "Received ReplicateExecutor command but executor was null")
+      } else {
+        executor.replicateExecutor(executorIdsToBeRemoved)
+      }
+
     case StopExecutor =>
       stopping.set(true)
       logInfo("Driver commanded a shutdown")

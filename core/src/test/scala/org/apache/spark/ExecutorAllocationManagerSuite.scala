@@ -1161,4 +1161,6 @@ private class DummyLocalSchedulerBackend (sc: SparkContext, sb: SchedulerBackend
   override def killExecutorsOnHost(host: String): Boolean = {
     false
   }
+
+  override def replicateThenKillExecutors(executorIds: Seq[String]): Seq[String] = Seq.empty
 }

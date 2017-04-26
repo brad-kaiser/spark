@@ -41,6 +41,7 @@ import org.apache.spark.network.shuffle.protocol.ExecutorShuffleInfo
 import org.apache.spark.rpc.RpcEnv
 import org.apache.spark.serializer.{SerializerInstance, SerializerManager}
 import org.apache.spark.shuffle.ShuffleManager
+import org.apache.spark.storage.BlockManagerMessages.GetBlockIds
 import org.apache.spark.storage.memory._
 import org.apache.spark.unsafe.Platform
 import org.apache.spark.util._
@@ -108,7 +109,7 @@ private[spark] class ByteBufferBlockData(
  * Note that [[initialize()]] must be called before the BlockManager is usable.
  */
 private[spark] class BlockManager(
-    executorId: String,
+    val executorId: String,
     rpcEnv: RpcEnv,
     val master: BlockManagerMaster,
     val serializerManager: SerializerManager,
@@ -1254,21 +1255,30 @@ private[spark] class BlockManager(
   }
 
   /**
-    * Replicate all blocks on this executor
     *
+    * @param executorIdsToBeReplicatedOff
+    * @return the id of this executor if successful
     */
-  def replicateAllBlocks(dontReplicateTo: Set[BlockManagerId]): Unit = {
+  // TODO bk this is dumb omg
+  def replicateAllBlocks(executorIdsToBeReplicatedOff: Seq[String]): Option[String] = {
+
+    val dontReplicateTo: Seq[BlockManagerId] =
+      master.driverEndpoint.askSync[Seq[BlockManagerId]](GetBlockIds(executorIdsToBeReplicatedOff))
+
     // TODO watch out for race conditions with new blocks getting saved
 
     // TODO the same block id might be in both stores, probably don't want to copy both
-    memoryStore.foreachKey { blockId =>
-      replicateBlock(blockId, dontReplicateTo, 3)
-      removeBlock(blockId)
-    }
-    diskStore.foreachKey { blockId =>
-      replicateBlock(blockId, dontReplicateTo, 3)
-      removeBlock(blockId)
-    }
+      memoryStore.foreachKey { blockId =>
+        replicateBlock(blockId, dontReplicateTo.toSet, 3)
+        removeBlock(blockId)
+      }
+      diskStore.foreachKey { blockId =>
+        replicateBlock(blockId, dontReplicateTo.toSet, 3)
+        removeBlock(blockId)
+      }
+
+    // TODO bk return this only if successful
+    Some(executorId)
 
   }
 

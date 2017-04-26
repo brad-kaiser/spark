@@ -200,6 +200,13 @@ private[spark] class Executor(
   }
 
   /**
+    * Replicate cached data on executor to other executors
+    */
+  def replicateExecutor(executorIds: Seq[String]): Option[String] = {
+    env.blockManager.replicateAllBlocks(executorIds)
+  }
+
+  /**
    * Function to kill the running tasks in an executor.
    * This can be called by executor back-ends to kill the
    * tasks instead of taking the JVM down.

@@ -138,6 +138,8 @@ class BlockManagerMasterEndpoint(
           }
         case None => context.reply(false)
       }
+
+    case GetBlockIds(execIds) => context.reply(execIds.flatMap(blockManagerIdByExecutor.get))
   }
 
   private def removeRdd(rddId: Int): Future[Seq[Int]] = {

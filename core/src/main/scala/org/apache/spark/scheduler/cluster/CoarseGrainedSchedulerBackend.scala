@@ -22,9 +22,8 @@ import java.util.concurrent.atomic.AtomicInteger
 import javax.annotation.concurrent.GuardedBy
 
 import scala.collection.mutable.{ArrayBuffer, HashMap, HashSet}
-import scala.concurrent.Future
+import scala.concurrent.{ExecutionContext, Future}
 import scala.concurrent.duration.Duration
-
 import org.apache.spark.{ExecutorAllocationClient, SparkEnv, SparkException, TaskState}
 import org.apache.spark.internal.Logging
 import org.apache.spark.rpc._
@@ -636,6 +635,32 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
 
     defaultAskTimeout.awaitResult(response)
   }
+
+  // TODO bk remove sync later
+  /**
+    * Have Executor replicate its cached data to other machines
+    * @param executorIds
+    * @return executor Ids
+    */
+  // if we can't replicate off data, go ahead and kill
+  // TODO bk make this nicer
+  override def replicateThenKillExecutors(executorIds: Seq[String]): Seq[String] = {
+    implicit val ec: ExecutionContext = ThreadUtils.sameThread
+    val replicated: Seq[Future[String]] = executorIds.map(id => replicateExecutor(id, executorIds))
+    val killed = replicated
+      .map( (fid: Future[String]) => fid.map(id => killExecutors(Seq(id))))
+    val result = Future.sequence(killed)
+    defaultAskTimeout.awaitResult(result).flatten
+  }
+
+  // try to replicate off
+  def replicateExecutor(executorId: String, otherExecIds: Seq[String]): Future[String] =
+    executorDataMap.get(executorId) match {
+      case Some(executor) => executor.executorEndpoint.askSync(ReplicateExecutor(otherExecIds))
+      case None =>
+        logWarning("Executor to replicate: $executorId, does not exist!")
+        Future.successful(executorId)
+    }
 
   /**
    * Kill the given list of executors through the cluster manager.

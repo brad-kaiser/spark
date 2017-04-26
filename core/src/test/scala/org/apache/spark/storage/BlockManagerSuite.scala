@@ -1335,7 +1335,7 @@ class BlockManagerSuite extends SparkFunSuite with Matchers with BeforeAndAfterE
     store.putSingle("a1", a1, StorageLevel.MEMORY_ONLY)
     store.putSingle("a2", a2, StorageLevel.MEMORY_ONLY)
 
-    store.replicateAllBlocks(Set(store.blockManagerId))
+    store.replicateAllBlocks(Seq(store.executorId))
 
     store.getLocalBytes("a1") shouldBe None
     store.getLocalBytes("a2") shouldBe None

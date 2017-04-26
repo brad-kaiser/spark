@@ -84,4 +84,10 @@ private[spark] trait ExecutorAllocationClient {
     val killedExecutors = killExecutors(Seq(executorId))
     killedExecutors.nonEmpty && killedExecutors(0).equals(executorId)
   }
+
+  /**
+    * Request that cluster mmanager replicate cached data off this executor and then kill
+    * @param executorIds
+    */
+  def replicateThenKillExecutors(executorIds: Seq[String]): Seq[String]
 }

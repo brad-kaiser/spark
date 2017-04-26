@@ -108,6 +108,10 @@ private[spark] class ExecutorAllocationManager(
   private val cachedExecutorIdleTimeoutS = conf.getTimeAsSeconds(
     "spark.dynamicAllocation.cachedExecutorIdleTimeout", s"${Integer.MAX_VALUE}s")
 
+  // whether or not to try and save cached data when executors are deallocated
+  private val replicateCachedData =
+    conf.getBoolean("spark.dynamicAllocation.recoverCachedData", false)
+
   // During testing, the methods to actually kill and add executors are mocked out
   private val testing = conf.getBoolean("spark.dynamicAllocation.testing", false)
 
@@ -424,6 +428,9 @@ private[spark] class ExecutorAllocationManager(
     // Send a request to the backend to kill this executor(s)
     val executorsRemoved = if (testing) {
       executorIdsToBeRemoved
+    } else if (replicateCachedData) {
+      client.replicateThenKillExecutors(executorIdsToBeRemoved)
+      // TODO bk make sure we actually kill executors eventually lol
     } else {
       client.killExecutors(executorIdsToBeRemoved)
     }
