@@ -18,7 +18,7 @@
 package org.apache.spark.scheduler
 
 import org.apache.spark.{LocalSparkContext, SparkConf, SparkContext, SparkException, SparkFunSuite}
-import org.apache.spark.util.{RpcUtils, SerializableBuffer}
+import org.apache.spark.util.{RpcUtils, SerializableBuffer, Utils}
 
 class CoarseGrainedSchedulerBackendSuite extends SparkFunSuite with LocalSparkContext {
 
@@ -36,6 +36,33 @@ class CoarseGrainedSchedulerBackendSuite extends SparkFunSuite with LocalSparkCo
     assert(thrown.getMessage.contains("using broadcast variables for large values"))
     val smaller = sc.parallelize(1 to 4).collect()
     assert(smaller.size === 4)
+  }
+
+  test("test replicating cached data after dynamic deallocation") {
+    val conf = new SparkConf()
+    conf.setAppName("test")
+    conf.setMaster("local-cluster[4, 1, 1024]")
+//    conf.set("spark.shuffle.service.enabled", "true") //TODO bk shuffle service makes test hang for some reason
+    conf.set("spark.dynamicAllocation.enabled", "false")
+//    conf.set("spark.dynamicAllocation.cachedExecutorIdleTimeout", "1s")
+//    conf.set("spark.dynamicAllocation.recoverCachedData", "true")
+//    conf.set("spark.dynamicAllocation.minExecutors", "2")
+
+    sc = new SparkContext(conf)
+
+    val rdd = sc.parallelize(1 to 1000, 4)
+    println(Utils.isDynamicAllocationEnabled(conf))
+    println(rdd.partitions.size)
+    println(rdd.cache)
+    println(rdd.count)
+    assert(rdd.count === 1000)
+    Thread.sleep(500)
+
+    println(sc.persistentRdds)
+    println(rdd.partitions.size)
+
+
+    sc.stop()
   }
 
 }
