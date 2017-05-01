@@ -200,8 +200,10 @@ private[spark] class Executor(
   }
 
   /**
-    * Replicate cached data on executor to other executors
-    */
+   * Replicate blocks on this executor to others
+   * @param executorIds don't replicate to these executors
+   * @return The executor id on success, none on failure
+   */
   def replicateExecutor(executorIds: Seq[String]): Option[String] = {
     env.blockManager.replicateAllBlocks(executorIds)
   }

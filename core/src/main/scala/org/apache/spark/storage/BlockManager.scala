@@ -1255,10 +1255,10 @@ private[spark] class BlockManager(
   }
 
   /**
-    *
-    * @param executorIdsToBeReplicatedOff
-    * @return the id of this executor if successful
-    */
+   * Replicates all blocks off of this block manager
+   * @param executorIdsToBeReplicatedOff
+   * @return
+   */
   // TODO bk this is dumb omg
   def replicateAllBlocks(executorIdsToBeReplicatedOff: Seq[String]): Option[String] = {
 

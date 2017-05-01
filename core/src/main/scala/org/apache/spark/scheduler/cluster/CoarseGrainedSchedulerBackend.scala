@@ -24,6 +24,7 @@ import javax.annotation.concurrent.GuardedBy
 import scala.collection.mutable.{ArrayBuffer, HashMap, HashSet}
 import scala.concurrent.{ExecutionContext, Future}
 import scala.concurrent.duration.Duration
+
 import org.apache.spark.{ExecutorAllocationClient, SparkEnv, SparkException, TaskState}
 import org.apache.spark.internal.Logging
 import org.apache.spark.rpc._
@@ -638,10 +639,10 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
 
   // TODO bk remove sync later
   /**
-    * Have Executor replicate its cached data to other machines
-    * @param executorIds
-    * @return executor Ids
-    */
+   * Have Executor replicate its cached data to other machines
+   * @param executorIds
+   * @return seq of all executorids that were succesfully killed
+   */
   // if we can't replicate off data, go ahead and kill
   // TODO bk make this nicer
   override def replicateThenKillExecutors(executorIds: Seq[String]): Seq[String] = {
