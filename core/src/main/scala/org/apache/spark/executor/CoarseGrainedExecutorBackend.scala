@@ -105,13 +105,6 @@ private[spark] class CoarseGrainedExecutorBackend(
         executor.killTask(taskId, interruptThread, reason)
       }
 
-    case ReplicateExecutor(executorIdsToBeRemoved) =>
-      if (executor == null) {
-        exitExecutor(1, "Received ReplicateExecutor command but executor was null")
-      } else {
-        executor.replicateExecutor(executorIdsToBeRemoved)
-      }
-
     case StopExecutor =>
       stopping.set(true)
       logInfo("Driver commanded a shutdown")
@@ -131,6 +124,17 @@ private[spark] class CoarseGrainedExecutorBackend(
         }
       }.start()
   }
+
+  // TODO bk should I just put this in receive and use send
+  override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
+    case ReplicateExecutor(executorIdsToBeRemoved) =>
+      if (executor == null) {
+        exitExecutor(1, "Received ReplicateExecutor command but executor was null")
+      } else {
+        executor.replicateExecutor(executorIdsToBeRemoved)
+      }
+  }
+
 
   override def onDisconnected(remoteAddress: RpcAddress): Unit = {
     if (stopping.get()) {
