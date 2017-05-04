@@ -646,6 +646,7 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
   // if we can't replicate off data, go ahead and kill
   // TODO bk make this nicer
   override def replicateThenKillExecutors(executorIds: Seq[String]): Seq[String] = {
+    logDebug(s"Replicating then kiling $executorIds")
     implicit val ec: ExecutionContext = ThreadUtils.sameThread
     val replicated: Seq[Future[String]] = executorIds.map(id => replicateExecutor(id, executorIds))
     val killed = replicated
@@ -657,7 +658,9 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
   // try to replicate off
   def replicateExecutor(executorId: String, otherExecIds: Seq[String]): Future[String] =
     executorDataMap.get(executorId) match {
-      case Some(executor) => executor.executorEndpoint.askSync(ReplicateExecutor(otherExecIds))
+      case Some(executor) =>
+        logDebug(s"Replicating all blocks for executor $executor")
+        executor.executorEndpoint.askSync(ReplicateExecutor(otherExecIds))
       case None =>
         logWarning("Executor to replicate: $executorId, does not exist!")
         Future.successful(executorId)

@@ -1260,19 +1260,25 @@ private[spark] class BlockManager(
    * @return
    */
   // TODO bk this is dumb omg
+  // TODO bk remove extraneous debug logs
   def replicateAllBlocks(executorIdsToBeReplicatedOff: Seq[String]): Option[String] = {
+    logDebug(s"replicating all data off $executorIdsToBeReplicatedOff")
 
     val dontReplicateTo: Seq[BlockManagerId] =
       master.driverEndpoint.askSync[Seq[BlockManagerId]](GetBlockIds(executorIdsToBeReplicatedOff))
+
+    logDebug(s"dont replicate to $dontReplicateTo")
 
     // TODO watch out for race conditions with new blocks getting saved
 
     // TODO the same block id might be in both stores, probably don't want to copy both
       memoryStore.foreachKey { blockId =>
+        logDebug(s"block id $blockId")
         replicateBlock(blockId, dontReplicateTo.toSet, 3)
         removeBlock(blockId)
       }
       diskStore.foreachKey { blockId =>
+        logDebug(s"block id $blockId")
         replicateBlock(blockId, dontReplicateTo.toSet, 3)
         removeBlock(blockId)
       }
