@@ -647,7 +647,8 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
   // TODO bk make this nicer
   override def replicateThenKillExecutors(executorIds: Seq[String]): Seq[String] = {
     logDebug(s"Replicating then kiling $executorIds")
-    implicit val ec: ExecutionContext = ThreadUtils.sameThread
+    // TODO bk is this the reight execution context
+    import scala.concurrent.ExecutionContext.Implicits.global
     val replicated: Seq[Future[String]] = executorIds.map(id => replicateExecutor(id, executorIds))
     val killed = replicated
       .map( (fid: Future[String]) => fid.map(id => killExecutors(Seq(id))))

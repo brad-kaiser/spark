@@ -164,7 +164,10 @@ private[spark] class DiskStore(
     }
   }
 
-  def foreachKey(f: BlockId => Unit): Unit = blockSizes.asScala.keys.map(BlockId.apply).foreach(f)
+  def foreachKey(f: BlockId => Unit): Unit = {
+    logDebug(s"all disk store keys ${blockSizes.asScala.keys}")
+    blockSizes.asScala.keys.map(BlockId.apply).foreach(f)
+  }
 
 }
 

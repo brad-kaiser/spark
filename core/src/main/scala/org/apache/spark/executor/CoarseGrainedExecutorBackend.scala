@@ -128,9 +128,11 @@ private[spark] class CoarseGrainedExecutorBackend(
   // TODO bk should I just put this in receive and use send
   override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
     case ReplicateExecutor(executorIdsToBeRemoved) =>
+      logDebug(s"In CoarseGrainedExecutorBackend with Replicate executor $executorIdsToBeRemoved")
       if (executor == null) {
         exitExecutor(1, "Received ReplicateExecutor command but executor was null")
       } else {
+        logDebug(s"getting ready to start replicating for $executor")
         executor.replicateExecutor(executorIdsToBeRemoved)
       }
   }

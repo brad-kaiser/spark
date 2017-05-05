@@ -205,6 +205,7 @@ private[spark] class Executor(
    * @return The executor id on success, none on failure
    */
   def replicateExecutor(executorIds: Seq[String]): Option[String] = {
+    logDebug(s"On executor env: $env, blockManager: ${env.blockManager} ")
     env.blockManager.replicateAllBlocks(executorIds)
   }
 
