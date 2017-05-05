@@ -1287,7 +1287,6 @@ private[spark] class BlockManager(
       }
     logDebug("done copying disk store")
 
-
     // TODO bk return this only if successful
     Some(executorId)
 

@@ -86,9 +86,9 @@ private[spark] trait ExecutorAllocationClient {
   }
 
   /**
-   * Request that cluster mmanager replicate cached data off this executor and then kill
+   * Request that cluster mmanager replicate cached data off this executor
    * @param executorIds
-   * @return seq of all executorids that were succesfully killed
+   * @return seq of all executorids that were succesfully replicatedOff
    */
-  def replicateThenKillExecutors(executorIds: Seq[String]): Seq[String]
+  def replicateEverythingOn(executorIds: Seq[String]): Seq[String]
 }

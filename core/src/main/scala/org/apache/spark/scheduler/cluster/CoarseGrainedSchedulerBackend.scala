@@ -637,34 +637,16 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
     defaultAskTimeout.awaitResult(response)
   }
 
-  // TODO bk remove sync later
-  /**
-   * Have Executor replicate its cached data to other machines
-   * @param executorIds
-   * @return seq of all executorids that were succesfully killed
-   */
-  // if we can't replicate off data, go ahead and kill
-  // TODO bk make this nicer
-  override def replicateThenKillExecutors(executorIds: Seq[String]): Seq[String] = {
-    logDebug(s"Replicating then kiling $executorIds")
-    // TODO bk is this the reight execution context
-    import scala.concurrent.ExecutionContext.Implicits.global
-    val replicated: Seq[Future[String]] = executorIds.map(id => replicateExecutor(id, executorIds))
-    val killed = replicated
-      .map( (fid: Future[String]) => fid.map(id => killExecutors(Seq(id))))
-    val result = Future.sequence(killed)
-    defaultAskTimeout.awaitResult(result).flatten
-  }
-
-  // try to replicate off
-  def replicateExecutor(executorId: String, otherExecIds: Seq[String]): Future[String] =
-    executorDataMap.get(executorId) match {
-      case Some(executor) =>
-        logDebug(s"Replicating all blocks for executor $executor")
-        executor.executorEndpoint.askSync(ReplicateExecutor(otherExecIds))
-      case None =>
-        logWarning("Executor to replicate: $executorId, does not exist!")
-        Future.successful(executorId)
+  override def replicateEverythingOn(executorIds: Seq[String]): Seq[String] =
+    executorIds.flatMap { executorId =>
+      executorDataMap.get(executorId) match {
+        case Some(executor) =>
+          logDebug(s"Replicating all blocks for executor $executor")
+          executor.executorEndpoint.askSync[Option[String]](ReplicateExecutor(executorIds))
+        case None =>
+          logWarning("Executor to replicate: $executorId, does not exist!")
+          None
+      }
     }
 
   /**

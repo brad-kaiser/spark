@@ -426,21 +426,19 @@ private[spark] class ExecutorAllocationManager(
     }
 
     // Send a request to the backend to kill this executor(s)
-    val executorsRemoved: Seq[String] = if (testing) {
-      executorIdsToBeRemoved
-    } else if (replicateCachedData) {
-      // TODO bk remove these logs
-      logDebug(s"Starting replicate and kill process for $executorIdsToBeRemoved")
-      val start = System.currentTimeMillis()
-      val result = client.replicateThenKillExecutors(executorIdsToBeRemoved)
-      val end = System.currentTimeMillis()
-      logDebug(s"replicate then kill executors took ${end - start} ms")
-      result
-      // TODO bk make sure we actually kill executors eventually lol
-    } else {
+    val executorsRemoved: Seq[String] = if (testing) executorIdsToBeRemoved else {
+      if (replicateCachedData) {
+        // TODO bk remove these logs
+        logDebug(s"Starting replicate process for $executorIdsToBeRemoved")
+        val start = System.currentTimeMillis()
+        val result = client.replicateEverythingOn(executorIdsToBeRemoved)
+        val end = System.currentTimeMillis()
+        logDebug(s"replicate then kill executors took ${end - start} ms")
+      }
       logDebug(s"Starting kill process for $executorIdsToBeRemoved")
       client.killExecutors(executorIdsToBeRemoved)
     }
+
     // reset the newExecutorTotal to the existing number of executors
     newExecutorTotal = numExistingExecutors
     if (testing || executorsRemoved.nonEmpty) {
