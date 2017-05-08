@@ -584,17 +584,15 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
       force: Boolean): Seq[String] = {
     logInfo(s"Requesting to kill executor(s) ${executorIds.mkString(", ")}")
 
-    val response = synchronized {
+    val response: Future[Seq[String]] = synchronized {
       val (knownExecutors, unknownExecutors) = executorIds.partition(executorDataMap.contains)
-      unknownExecutors.foreach { id =>
-        logWarning(s"Executor to kill $id does not exist!")
-      }
+      unknownExecutors.foreach(id => logWarning(s"Executor to kill $id does not exist!"))
 
       // If an executor is already pending to be removed, do not kill it again (SPARK-9795)
       // If this executor is busy, do not kill it unless we are told to force kill it (SPARK-9552)
       val executorsToKill = knownExecutors
-        .filter { id => !executorsPendingToRemove.contains(id) }
-        .filter { id => force || !scheduler.isExecutorBusy(id) }
+        .filter(id => !executorsPendingToRemove.contains(id))
+        .filter(id => force || !scheduler.isExecutorBusy(id))
       executorsToKill.foreach { id => executorsPendingToRemove(id) = !replace }
 
       logInfo(s"Actual list of executor(s) to be killed is ${executorsToKill.mkString(", ")}")
@@ -627,11 +625,15 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
           _ => Future.successful(false)
         }
 
-      val killResponse = adjustTotalExecutors.flatMap(killExecutors)(ThreadUtils.sameThread)
+      val killResponse = if (executorsToKill.nonEmpty) {
+        adjustTotalExecutors.flatMap(_ => doKillExecutors(executorsToKill))(ThreadUtils.sameThread)
+      } else {
+        Future.successful(false)
+      }
 
-      killResponse.flatMap(killSuccessful =>
+      killResponse.flatMap { killSuccessful =>
         Future.successful (if (killSuccessful) executorsToKill else Seq.empty[String])
-      )(ThreadUtils.sameThread)
+      }(ThreadUtils.sameThread)
     }
 
     defaultAskTimeout.awaitResult(response)
@@ -642,7 +644,8 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
       executorDataMap.get(executorId) match {
         case Some(executor) =>
           logDebug(s"Replicating all blocks for executor $executor")
-          executor.executorEndpoint.askSync[Option[String]](ReplicateExecutor(executorIds))
+          // TODO bk shouldn't askSync in prod code
+          Some(executor.executorEndpoint.askSync[String](ReplicateExecutor(executorIds)))
         case None =>
           logWarning("Executor to replicate: $executorId, does not exist!")
           None

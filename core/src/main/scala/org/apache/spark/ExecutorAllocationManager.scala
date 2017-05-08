@@ -428,7 +428,7 @@ private[spark] class ExecutorAllocationManager(
     // Send a request to the backend to kill this executor(s)
     val executorsRemoved: Seq[String] = if (testing) executorIdsToBeRemoved else {
       if (replicateCachedData) {
-        // TODO bk remove these logs
+        // TODO bk cleanup these logs
         logDebug(s"Starting replicate process for $executorIdsToBeRemoved")
         val start = System.currentTimeMillis()
         val result = client.replicateEverythingOn(executorIdsToBeRemoved)
@@ -555,10 +555,9 @@ private[spark] class ExecutorAllocationManager(
         // blocks we are concerned with are reported to the driver. Note that this
         // does not include broadcast blocks.
         val hasCachedBlocks = SparkEnv.get.blockManager.master.hasCachedBlocks(executorId)
-        // TODO bk maybe get rid of this log
-        logDebug(s"executor $executorId has cached blocks? $hasCachedBlocks")
         val now = clock.getTimeMillis()
         val timeout = {
+          // TODO bk should graceful shutdown affect this timeout logic?
           if (hasCachedBlocks) {
             // Use a different timeout if the executor has cached blocks.
             now + cachedExecutorIdleTimeoutS * 1000

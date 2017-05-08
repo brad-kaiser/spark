@@ -1256,12 +1256,12 @@ private[spark] class BlockManager(
 
   /**
    * Replicates all blocks off of this block manager
-   * @param executorIdsToBeReplicatedOff
-   * @return
+   * @param executorIdsToBeReplicatedOff The executors that need to have their rdd blocks replicated
+   *                                     before they are killed
+   * @return Unit
    */
-  // TODO bk this is dumb omg
   // TODO bk remove extraneous debug logs
-  def replicateAllBlocks(executorIdsToBeReplicatedOff: Seq[String]): Option[String] = {
+  def replicateAllBlocks(executorIdsToBeReplicatedOff: Seq[String]): Unit = {
     logDebug(s"replicating all data off $executorIdsToBeReplicatedOff")
 
     val dontReplicateTo: Seq[BlockManagerId] =
@@ -1272,7 +1272,7 @@ private[spark] class BlockManager(
     // TODO watch out for race conditions with new blocks getting saved
 
     // TODO the same block id might be in both stores, probably don't want to copy both
-      memoryStore.foreachKey { blockId =>
+      memoryStore.blocks.foreach { blockId =>
         if (blockId.isRDD) {
           logDebug(s"replicating block id $blockId")
           replicateBlock(blockId, dontReplicateTo.toSet, 3)
@@ -1283,21 +1283,17 @@ private[spark] class BlockManager(
         }
       }
     logDebug("done copying memorystore")
-      diskStore.foreachKey { blockId =>
+      diskStore.blocks.foreach { blockId =>
         if (blockId.isRDD) {
           logDebug(s"replicating block id $blockId")
           replicateBlock(blockId, dontReplicateTo.toSet, 3)
           logDebug(s"removing block id $blockId")
           removeBlock(blockId)
-        }else {
+        } else {
           logDebug(s"Not replicating $blockId")
         }
       }
     logDebug("done copying disk store")
-
-    // TODO bk return this only if successful
-    Some(executorId)
-
   }
 
   /**

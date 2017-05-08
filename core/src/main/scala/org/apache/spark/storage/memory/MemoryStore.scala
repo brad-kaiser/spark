@@ -561,11 +561,7 @@ private[spark] class MemoryStore(
     }
   }
 
-  // TODO: this is probably dumb
-  def foreachKey(f: BlockId => Unit): Unit = {
-    logDebug(s"all block ids = ${entries.keySet.asScala}")
-    entries.keySet.asScala.clone.foreach(f)
-  }
+  def blocks: Set[BlockId] = entries.keySet.asScala.toSet
 
   def contains(blockId: BlockId): Boolean = {
     entries.synchronized { entries.containsKey(blockId) }
