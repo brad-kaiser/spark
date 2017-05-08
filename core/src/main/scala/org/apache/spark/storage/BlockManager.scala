@@ -1273,17 +1273,25 @@ private[spark] class BlockManager(
 
     // TODO the same block id might be in both stores, probably don't want to copy both
       memoryStore.foreachKey { blockId =>
-        logDebug(s"replicating block id $blockId")
-        replicateBlock(blockId, dontReplicateTo.toSet, 3)
-        logDebug(s"removing block id $blockId")
-        removeBlock(blockId)
+        if (blockId.isRDD) {
+          logDebug(s"replicating block id $blockId")
+          replicateBlock(blockId, dontReplicateTo.toSet, 3)
+          logDebug(s"removing block id $blockId")
+          removeBlock(blockId)
+        } else {
+          logDebug(s"Not replicating $blockId")
+        }
       }
     logDebug("done copying memorystore")
       diskStore.foreachKey { blockId =>
-        logDebug(s"replicating block id $blockId")
-        replicateBlock(blockId, dontReplicateTo.toSet, 3)
-        logDebug(s"removing block id $blockId")
-        removeBlock(blockId)
+        if (blockId.isRDD) {
+          logDebug(s"replicating block id $blockId")
+          replicateBlock(blockId, dontReplicateTo.toSet, 3)
+          logDebug(s"removing block id $blockId")
+          removeBlock(blockId)
+        }else {
+          logDebug(s"Not replicating $blockId")
+        }
       }
     logDebug("done copying disk store")
 
