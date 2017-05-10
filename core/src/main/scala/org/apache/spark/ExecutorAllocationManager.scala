@@ -427,6 +427,7 @@ private[spark] class ExecutorAllocationManager(
 
     // Send a request to the backend to kill this executor(s)
     val executorsRemoved: Seq[String] = if (testing) executorIdsToBeRemoved else {
+      // TODO bk make replicateCachedData dynamic
       if (replicateCachedData) {
         // TODO bk cleanup these logs
         logDebug(s"Starting replicate process for $executorIdsToBeRemoved")

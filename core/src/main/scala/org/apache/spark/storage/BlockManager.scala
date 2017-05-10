@@ -1264,6 +1264,7 @@ private[spark] class BlockManager(
   def replicateAllBlocks(executorIdsToBeReplicatedOff: Seq[String]): Unit = {
     logDebug(s"replicating all data off $executorIdsToBeReplicatedOff")
 
+    // TODO bk can we lookup block ids before we send ReplicateExecutor message
     val dontReplicateTo: Seq[BlockManagerId] =
       master.driverEndpoint.askSync[Seq[BlockManagerId]](GetBlockIds(executorIdsToBeReplicatedOff))
 
@@ -1272,9 +1273,12 @@ private[spark] class BlockManager(
     // TODO watch out for race conditions with new blocks getting saved
 
     // TODO the same block id might be in both stores, probably don't want to copy both
+    // TODO bk catch any exceptions
+    // TODO bk refactor this
       memoryStore.blocks.foreach { blockId =>
         if (blockId.isRDD) {
           logDebug(s"replicating block id $blockId")
+          // TODO bk get configged replication instead of 3
           replicateBlock(blockId, dontReplicateTo.toSet, 3)
           logDebug(s"removing block id $blockId")
           removeBlock(blockId)
