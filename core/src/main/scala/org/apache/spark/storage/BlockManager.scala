@@ -1262,6 +1262,7 @@ private[spark] class BlockManager(
    */
   // TODO bk remove extraneous debug logs
   def replicateAllBlocks(executorIdsToBeReplicatedOff: Seq[String]): Unit = {
+
     logDebug(s"replicating all data off $executorIdsToBeReplicatedOff")
 
     // TODO bk can we lookup block ids before we send ReplicateExecutor message
@@ -1270,34 +1271,26 @@ private[spark] class BlockManager(
 
     logDebug(s"dont replicate to $dontReplicateTo")
 
-    // TODO watch out for race conditions with new blocks getting saved
-
-    // TODO the same block id might be in both stores, probably don't want to copy both
-    // TODO bk catch any exceptions
-    // TODO bk refactor this
-      memoryStore.blocks.foreach { blockId =>
-        if (blockId.isRDD) {
-          logDebug(s"replicating block id $blockId")
-          // TODO bk get configged replication instead of 3
-          replicateBlock(blockId, dontReplicateTo.toSet, 3)
-          logDebug(s"removing block id $blockId")
-          removeBlock(blockId)
-        } else {
-          logDebug(s"Not replicating $blockId")
-        }
-      }
+    // TODO bk the same block id might be in both stores, probably don't want to copy both
+    memoryStore.blocks.foreach(saveBlock(dontReplicateTo))
     logDebug("done copying memorystore")
-      diskStore.blocks.foreach { blockId =>
-        if (blockId.isRDD) {
-          logDebug(s"replicating block id $blockId")
-          replicateBlock(blockId, dontReplicateTo.toSet, 3)
-          logDebug(s"removing block id $blockId")
-          removeBlock(blockId)
-        } else {
-          logDebug(s"Not replicating $blockId")
-        }
-      }
+    diskStore.blocks.foreach(saveBlock(dontReplicateTo))
     logDebug("done copying disk store")
+  }
+
+  private def saveBlock(dontReplicateTo: Seq[BlockManagerId])(blockId: BlockId): Unit = {
+    if (blockId.isRDD) {
+      // TODO bk get configged replication instead of 3
+      try {
+        replicateBlock(blockId, dontReplicateTo.toSet, 3)
+        removeBlock(blockId)
+      } catch {
+        case ex: Exception =>
+          logWarning(s"Couldn't save block: $blockId before killing executor. Dropping it.")
+      }
+    } else {
+      logDebug(s"Not replicating $blockId")
+    }
   }
 
   /**
