@@ -273,6 +273,7 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
         !executorsPendingLossReason.contains(executorId)
     }
 
+
     // Launch tasks returned by a set of resource offers
     private def launchTasks(tasks: Seq[Seq[TaskDescription]]) {
       for (task <- tasks.flatten) {
@@ -673,6 +674,10 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
     // Kill all the executors on this host in an event loop to ensure serialization.
     driverEndpoint.send(KillExecutorsOnHost(host))
     true
+  }
+
+  override def markForDeath(executorIds: Seq[String]): Unit = synchronized {
+    executorIds.foreach( id => executorsPendingToRemove(id) = true )
   }
 }
 

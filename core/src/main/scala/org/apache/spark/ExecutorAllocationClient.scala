@@ -91,4 +91,10 @@ private[spark] trait ExecutorAllocationClient {
    * @return seq of all executorids that were succesfully replicatedOff
    */
   def replicateEverythingOn(executorIds: Seq[String]): Seq[String]
+
+  /**
+   * Mark these executors as pending to be removed
+   * @param executorIds
+   */
+  def markForDeath(executorIds: Seq[String]): Unit
 }

@@ -430,6 +430,7 @@ private[spark] class ExecutorAllocationManager(
       // TODO bk make replicateCachedData dynamic
       if (replicateCachedData) {
         // TODO bk cleanup these logs
+        client.markForDeath(executorIdsToBeRemoved)
         logDebug(s"Starting replicate process for $executorIdsToBeRemoved")
         val start = System.currentTimeMillis()
         val result = client.replicateEverythingOn(executorIdsToBeRemoved)
