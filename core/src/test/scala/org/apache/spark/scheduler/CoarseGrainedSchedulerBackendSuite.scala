@@ -17,10 +17,16 @@
 
 package org.apache.spark.scheduler
 
+import org.scalatest.Matchers
+
 import org.apache.spark.{LocalSparkContext, SparkConf, SparkContext, SparkException, SparkFunSuite}
+import org.apache.spark.network.TransportContext
+import org.apache.spark.network.netty.SparkTransportConf
+import org.apache.spark.network.shuffle.{ExternalShuffleBlockHandler, ExternalShuffleClient}
 import org.apache.spark.util.{RpcUtils, SerializableBuffer, Utils}
 
-class CoarseGrainedSchedulerBackendSuite extends SparkFunSuite with LocalSparkContext {
+class CoarseGrainedSchedulerBackendSuite extends SparkFunSuite
+  with LocalSparkContext with Matchers {
 
   test("serialized task larger than max RPC message size") {
     val conf = new SparkConf
@@ -38,32 +44,61 @@ class CoarseGrainedSchedulerBackendSuite extends SparkFunSuite with LocalSparkCo
     assert(smaller.size === 4)
   }
 
-//  test("test replicating cached data after dynamic deallocation") {
-//    val conf = new SparkConf()
-//    conf.setAppName("test")
-//    conf.setMaster("local-cluster[4, 1, 1024]")
-//    conf.set("spark.dynamicAllocation.enabled", "true")
-//    conf.set("spark.dynamicAllocation.testing", "true")
-//    conf.set("spark.dynamicAllocation.cachedExecutorIdleTimeout", "1s")
+  // make sure that the unit test working directory is the spark home directory
+  // otherwise test will hang indefinitely
+  // scalastyle:off println
+  test("test that cached data is replicated before dynamic de-allocation") {
+    val conf = new SparkConf()
+    conf.setAppName("test")
+    conf.setMaster("local-cluster[4, 1, 512]")
+    conf.set("spark.executor.memory", "512m")
+    conf.set("spark.dynamicAllocation.enabled", "true")
+    conf.set("spark.dynamicAllocation.testing", "false")
+    conf.set("spark.shuffle.service.enabled", "true")
+    conf.set("spark.dynamicAllocation.cachedExecutorIdleTimeout", "1s")
+    conf.set("spark.dynamicAllocation.executorIdleTimeout", "1s")
+    conf.set("spark.dynamicAllocation.initialExecutors", "4")
 //    conf.set("spark.dynamicAllocation.recoverCachedData", "true")
-//    conf.set("spark.dynamicAllocation.minExecutors", "2")
-//
-//    sc = new SparkContext(conf)
-//    sc.schedulerBackend
-//
-//    val rdd = sc.parallelize(1 to 1000, 4)
-//    println(Utils.isDynamicAllocationEnabled(conf))
-//    println(rdd.partitions.size)
-//    println(rdd.cache)
-//    println(rdd.count)
-//    assert(rdd.count === 1000)
-//    Thread.sleep(500)
-//
-//    println(sc.persistentRdds)
-//    println(rdd.partitions.size)
-//
-//
-//    sc.stop()
-//  }
+    conf.set("spark.dynamicAllocation.minExecutors", "1")
+
+    val transportConf = SparkTransportConf.fromSparkConf(conf, "shuffle", numUsableCores = 4)
+    val rpcHandler = new ExternalShuffleBlockHandler(transportConf, null)
+    val transportContext = new TransportContext(transportConf, rpcHandler)
+    val server = transportContext.createServer()
+    conf.set("spark.shuffle.service.port", server.getPort.toString)
+
+    sc = new SparkContext(conf)
+    sc.env.blockManager.externalShuffleServiceEnabled should equal(true)
+    sc.env.blockManager.shuffleClient.getClass should equal(classOf[ExternalShuffleClient])
+    sc.schedulerBackend
+
+    println("waiting on executrs up")
+    sc.jobProgressListener.waitUntilExecutorsUp(2, 60000)
+    println("executors up")
+
+    val rdd = sc.parallelize(1 to 1000, 4)
+    println(Utils.isDynamicAllocationEnabled(conf))
+    println(rdd.partitions.size)
+    println(rdd.count)
+    assert(rdd.count === 1000)
+    println(sc.getExecutorMemoryStatus)
+    println("sleeping  XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")
+    Thread.sleep(9000)
+    println(sc.getExecutorMemoryStatus)
+
+
+    sc.stop()
+  }
+  // scalastyle:on println
+
+  test("executors can access replicated data after dynamic deallocation") {}
+  test("blocks spilled to disk are properly cleaned up after dynamic deallocation.")  {}
+  test("Nodes that are actively deallocation won't get new tasks.")  {}
+  test("When node memory is limited we are intelligent about replicating data ") {}
+
+
+
+
+
 
 }

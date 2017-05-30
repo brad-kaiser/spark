@@ -52,7 +52,7 @@ class LocalSparkCluster(
     // Disable REST server on Master in this mode unless otherwise specified
     val _conf = conf.clone()
       .setIfMissing("spark.master.rest.enabled", "false")
-      .set("spark.shuffle.service.enabled", "false")
+//      .set("spark.shuffle.service.enabled", "false")
 
     /* Start the Master */
     val (rpcEnv, webUiPort, _) = Master.startRpcEnvAndEndpoint(localHostname, 0, 0, _conf)
@@ -63,8 +63,11 @@ class LocalSparkCluster(
 
     /* Start the Workers */
     for (workerNum <- 1 to numWorkers) {
+      val customConf = _conf.clone
+      val newPort = customConf.getInt("spark.shuffle.service.port", 7337) + workerNum
+      customConf.set("spark.shuffle.service.port", s"$newPort")
       val workerEnv = Worker.startRpcEnvAndEndpoint(localHostname, 0, 0, coresPerWorker,
-        memoryPerWorker, masters, null, Some(workerNum), _conf)
+        memoryPerWorker, masters, null, Some(workerNum), customConf)
       workerRpcEnvs += workerEnv
     }
 
