@@ -29,7 +29,7 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.internal.config.{DYN_ALLOCATION_MAX_EXECUTORS, DYN_ALLOCATION_MIN_EXECUTORS}
 import org.apache.spark.metrics.source.Source
 import org.apache.spark.scheduler._
-import org.apache.spark.util.{Clock, SystemClock, ThreadUtils, Utils}
+import org.apache.spark.util._
 
 /**
  * An agent that dynamically allocates and removes executors based on the workload.
@@ -88,6 +88,8 @@ private[spark] class ExecutorAllocationManager(
 
   import ExecutorAllocationManager._
 
+  var recoverShutdown: RecoverCacheShutdown = _
+
   // Lower and upper bounds on the number of executors.
   private val minNumExecutors = conf.get(DYN_ALLOCATION_MIN_EXECUTORS)
   private val maxNumExecutors = conf.get(DYN_ALLOCATION_MAX_EXECUTORS)
@@ -107,6 +109,10 @@ private[spark] class ExecutorAllocationManager(
 
   private val cachedExecutorIdleTimeoutS = conf.getTimeAsSeconds(
     "spark.dynamicAllocation.cachedExecutorIdleTimeout", s"${Integer.MAX_VALUE}s")
+
+  // whether or not to try and save cached data when executors are deallocated
+  private val replicateCachedData =
+    conf.getBoolean("spark.dynamicAllocation.recoverCachedData", defaultValue = false)
 
   // During testing, the methods to actually kill and add executors are mocked out
   private val testing = conf.getBoolean("spark.dynamicAllocation.testing", false)
@@ -234,12 +240,14 @@ private[spark] class ExecutorAllocationManager(
     executor.scheduleWithFixedDelay(scheduleTask, 0, intervalMillis, TimeUnit.MILLISECONDS)
 
     client.requestTotalExecutors(numExecutorsTarget, localityAwareTasks, hostToLocalTaskCount)
+    recoverShutdown = RecoverCacheShutdown(this, conf)
   }
 
   /**
    * Stop the allocation manager.
    */
   def stop(): Unit = {
+    recoverShutdown.stop()
     executor.shutdown()
     executor.awaitTermination(10, TimeUnit.SECONDS)
   }
@@ -416,63 +424,52 @@ private[spark] class ExecutorAllocationManager(
    * Request the cluster manager to remove the given executors.
    * Returns the list of executors which are removed.
    */
-  private def removeExecutors(executors: Seq[String]): Seq[String] = synchronized {
-    val executorIdsToBeRemoved = new ArrayBuffer[String]
-
+  private def removeExecutors(executors: Seq[String]): Unit = synchronized {
     logInfo("Request to remove executorIds: " + executors.mkString(", "))
-    val numExistingExecutors = allocationManager.executorIds.size - executorsPendingToRemove.size
+    val numExistingExecs = allocationManager.executorIds.size - executorsPendingToRemove.size
+    val execCountFloor = Math.max(minNumExecutors, numExecutorsTarget)
+    val (executorIdsToBeRemoved, dontRemove) = executors
+      .filter(canBeKilled)
+      .splitAt(numExistingExecs - execCountFloor)
 
-    var newExecutorTotal = numExistingExecutors
-    executors.foreach { executorIdToBeRemoved =>
-      if (newExecutorTotal - 1 < minNumExecutors) {
-        logDebug(s"Not removing idle executor $executorIdToBeRemoved because there are only " +
-          s"$newExecutorTotal executor(s) left (minimum number of executor limit $minNumExecutors)")
-      } else if (newExecutorTotal - 1 < numExecutorsTarget) {
-        logDebug(s"Not removing idle executor $executorIdToBeRemoved because there are only " +
-          s"$newExecutorTotal executor(s) left (number of executor target $numExecutorsTarget)")
-      } else if (canBeKilled(executorIdToBeRemoved)) {
-        executorIdsToBeRemoved += executorIdToBeRemoved
-        newExecutorTotal -= 1
-      }
+    dontRemove.foreach { execId =>
+      logDebug(s"Not removing idle executor $execId because it " +
+        s"would put us below the minimum limit of $minNumExecutors executors" +
+        s"or number of target executors $numExecutorsTarget")
     }
 
     if (executorIdsToBeRemoved.isEmpty) {
-      return Seq.empty[String]
-    }
-
-    // Send a request to the backend to kill this executor(s)
-    val executorsRemoved = if (testing) {
-      executorIdsToBeRemoved
-    } else {
-      client.killExecutors(executorIdsToBeRemoved)
-    }
-    // [SPARK-21834] killExecutors api reduces the target number of executors.
-    // So we need to update the target with desired value.
-    client.requestTotalExecutors(numExecutorsTarget, localityAwareTasks, hostToLocalTaskCount)
-    // reset the newExecutorTotal to the existing number of executors
-    newExecutorTotal = numExistingExecutors
-    if (testing || executorsRemoved.nonEmpty) {
-      executorsRemoved.foreach { removedExecutorId =>
-        newExecutorTotal -= 1
-        logInfo(s"Removing executor $removedExecutorId because it has been idle for " +
-          s"$executorIdleTimeoutS seconds (new desired total will be $newExecutorTotal)")
-        executorsPendingToRemove.add(removedExecutorId)
-      }
-      executorsRemoved
-    } else {
-      logWarning(s"Unable to reach the cluster manager to kill executor/s " +
-        s"${executorIdsToBeRemoved.mkString(",")} or no executor eligible to kill!")
       Seq.empty[String]
+    } else if (testing) {
+      recordExecutorKill(executorIdsToBeRemoved)
+    } else if (replicateCachedData) {
+      logDebug(s"Starting replicate process for $executorIdsToBeRemoved")
+      client.markForDeath(executorIdsToBeRemoved)
+      recordExecutorKill(executorIdsToBeRemoved)
+      recoverShutdown.startExecutorKill(executorIdsToBeRemoved)
+    } else {
+      val killed = killExecutors(executorIdsToBeRemoved)
+      recordExecutorKill(killed)
     }
   }
 
-  /**
-   * Request the cluster manager to remove the given executor.
-   * Return whether the request is acknowledged.
-   */
-  private def removeExecutor(executorId: String): Boolean = synchronized {
-    val executorsRemoved = removeExecutors(Seq(executorId))
-    executorsRemoved.nonEmpty && executorsRemoved(0) == executorId
+  def killExecutors(executorIds: Seq[String]): Seq[String] = {
+    logDebug(s"Starting kill process for $executorIds")
+    val result = client.killExecutors(executorIds)
+    if (result.isEmpty) {
+      logWarning(s"Unable to reach the cluster manager to kill executor/s " +
+        s"${executorIds.mkString(",")} or no executor eligible to kill!")
+    }
+    result
+  }
+
+  private def recordExecutorKill(executorsRemoved: Seq[String]): Unit = synchronized {
+        // [SPARK-21834] killExecutors api reduces the target number of executors.
+        // So we need to update the target with desired value.
+        client.requestTotalExecutors(numExecutorsTarget, localityAwareTasks, hostToLocalTaskCount)
+    executorsPendingToRemove ++= executorsRemoved
+    logInfo(s"Removing executor $executorsRemoved because it has been idle for " +
+      s"$executorIdleTimeoutS seconds")
   }
 
   /**

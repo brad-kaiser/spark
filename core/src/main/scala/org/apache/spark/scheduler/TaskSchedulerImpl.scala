@@ -313,6 +313,7 @@ private[spark] class TaskSchedulerImpl(
   def resourceOffers(offers: IndexedSeq[WorkerOffer]): Seq[Seq[TaskDescription]] = synchronized {
     // Mark each slave as alive and remember its hostname
     // Also track if new executor is added
+    logDebug(s"offered to scheduler s$offers")
     var newExecAvail = false
     for (o <- offers) {
       if (!hostToExecutors.contains(o.host)) {

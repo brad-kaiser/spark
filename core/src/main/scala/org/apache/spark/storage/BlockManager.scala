@@ -1249,6 +1249,7 @@ private[spark] class BlockManager(
   def replicateBlock(
       blockId: BlockId,
       existingReplicas: Set[BlockManagerId],
+      excluding: Set[BlockManagerId],
       maxReplicas: Int): Unit = {
     logInfo(s"Using $blockManagerId to pro-actively replicate $blockId")
     blockInfoManager.lockForReading(blockId).foreach { info =>
@@ -1263,7 +1264,7 @@ private[spark] class BlockManager(
       // this way, we won't try to replicate to a missing executor with a stale reference
       getPeers(forceFetch = true)
       try {
-        replicate(blockId, data, storageLevel, info.classTag, existingReplicas)
+        replicate(blockId, data, storageLevel, info.classTag, existingReplicas, excluding)
       } finally {
         logDebug(s"Releasing lock for $blockId")
         releaseLockAndDispose(blockId, data)
@@ -1280,7 +1281,8 @@ private[spark] class BlockManager(
       data: BlockData,
       level: StorageLevel,
       classTag: ClassTag[_],
-      existingReplicas: Set[BlockManagerId] = Set.empty): Unit = {
+      existingReplicas: Set[BlockManagerId] = Set.empty,
+      excludedBlockManagers: Set[BlockManagerId] = Set.empty): Unit = {
 
     val maxReplicationFailures = conf.getInt("spark.storage.maxReplicationFailures", 1)
     val tLevel = StorageLevel(
@@ -1297,7 +1299,9 @@ private[spark] class BlockManager(
     val peersFailedToReplicateTo = mutable.HashSet.empty[BlockManagerId]
     var numFailures = 0
 
-    val initialPeers = getPeers(false).filterNot(existingReplicas.contains)
+    val initialPeers = getPeers(false)
+      .filterNot(existingReplicas.contains)
+      .filterNot(excludedBlockManagers.contains)
 
     var peersForReplication = blockReplicationPolicy.prioritize(
       blockManagerId,

@@ -84,4 +84,10 @@ private[spark] trait ExecutorAllocationClient {
     val killedExecutors = killExecutors(Seq(executorId))
     killedExecutors.nonEmpty && killedExecutors(0).equals(executorId)
   }
+
+  /**
+   * Mark these executors as pending to be removed
+   * @param executorIds Executors that will be removed and should not accept new work.
+   */
+  def markForDeath(executorIds: Seq[String]): Unit
 }

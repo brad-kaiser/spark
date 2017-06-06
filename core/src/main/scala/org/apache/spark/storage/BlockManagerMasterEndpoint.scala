@@ -97,6 +97,10 @@ class BlockManagerMasterEndpoint(
     case GetStorageStatus =>
       context.reply(storageStatus)
 
+    case GetCachedBlocks(executorId) => context.reply(getCachedBlocks(executorId))
+
+    case GetSizeOfBlocks(blocks) => context.reply(getSizeOfBlocks(blocks))
+
     case GetBlockStatus(blockId, askSlaves) =>
       context.reply(blockStatus(blockId, askSlaves))
 
@@ -119,6 +123,10 @@ class BlockManagerMasterEndpoint(
     case RemoveExecutor(execId) =>
       removeExecutor(execId)
       context.reply(true)
+
+    case ReplicateOneBlock(execId, blockId, exclude) =>
+      logDebug(s"Replicating first block on $execId")
+      context.reply(replicateOneBlock(execId, blockId, exclude))
 
     case StopBlockManagerMaster =>
       context.reply(true)
@@ -221,7 +229,8 @@ class BlockManagerMasterEndpoint(
         val candidateBMId = blockLocations(i)
         blockManagerInfo.get(candidateBMId).foreach { bm =>
           val remainingLocations = locations.toSeq.filter(bm => bm != candidateBMId)
-          val replicateMsg = ReplicateBlock(blockId, remainingLocations, maxReplicas)
+          val replicateMsg =
+            ReplicateBlock(blockId, remainingLocations, Seq.empty[BlockManagerId], maxReplicas)
           bm.slaveEndpoint.ask[Boolean](replicateMsg)
         }
       }
@@ -235,6 +244,44 @@ class BlockManagerMasterEndpoint(
   private def removeExecutor(execId: String) {
     logInfo("Trying to remove executor " + execId + " from BlockManagerMaster.")
     blockManagerIdByExecutor.get(execId).foreach(removeBlockManager)
+  }
+
+  private def replicateOneBlock(
+      execId: String,
+      blockId: BlockId,
+      excludeExecutors: Seq[String]): Future[Boolean] = {
+    logDebug(s"replicating block $blockId")
+    val excluded = excludeExecutors.flatMap(blockManagerIdByExecutor.get)
+    val response: Option[Future[Boolean]] = for {
+      blockManagerId <- blockManagerIdByExecutor.get(execId)
+      info <- blockManagerInfo.get(blockManagerId)
+      replicaSet <- blockLocations.asScala.get(blockId)
+      replicas = replicaSet.toSeq
+      maxReps = replicaSet.size + 2
+    } yield info.slaveEndpoint.ask[Boolean](ReplicateBlock(blockId, replicas, excluded, maxReps))
+
+    response.getOrElse(Future.successful(false))
+  }
+
+  private def getCachedBlocks(executorId: String): collection.Set[BlockId] = {
+    val cachedBlocks = for {
+      blockManagerId <- blockManagerIdByExecutor.get(executorId)
+      info <- blockManagerInfo.get(blockManagerId)
+    } yield info.cachedBlocks
+
+    cachedBlocks.getOrElse(Set.empty)
+  }
+
+  private def getSizeOfBlocks(blocks: Seq[(String, BlockId)]): Long = {
+    val sizes: Seq[Long] = for {
+      (executorId, blockId) <- blocks
+      blockManagerId <- blockManagerIdByExecutor.get(executorId)
+      info <- blockManagerInfo.get(blockManagerId)
+      status <- Option(info.blocks.get(blockId))
+      size = status.memSize
+    } yield size
+
+    sizes.sum
   }
 
   /**
