@@ -236,13 +236,15 @@ class BlockManagerMaster(
     }
   }
 
+  def replicateAllRdds(executorIds: Seq[String]): Future[Seq[Boolean]] =
+    driverEndpoint.askSync[Future[Seq[Boolean]]](ReplicateAllRdds(executorIds))
+
   /** Send a one-way message to the master endpoint, to which we expect it to reply with true. */
   private def tell(message: Any) {
     if (!driverEndpoint.askSync[Boolean](message)) {
       throw new SparkException("BlockManagerMasterEndpoint returned false, expected true.")
     }
   }
-
 }
 
 private[spark] object BlockManagerMaster {
