@@ -120,6 +120,8 @@ class BlockManagerMasterEndpoint(
       removeExecutor(execId)
       context.reply(true)
 
+    case ReplicateAllRdds(execIds) => context.reply(replicateAllRdds(execIds))
+
     case StopBlockManagerMaster =>
       context.reply(true)
       stop()
@@ -221,7 +223,8 @@ class BlockManagerMasterEndpoint(
         val candidateBMId = blockLocations(i)
         blockManagerInfo.get(candidateBMId).foreach { bm =>
           val remainingLocations = locations.toSeq.filter(bm => bm != candidateBMId)
-          val replicateMsg = ReplicateBlock(blockId, remainingLocations, maxReplicas)
+          val replicateMsg =
+            ReplicateBlock(blockId, remainingLocations, Seq.empty[BlockManagerId], maxReplicas)
           bm.slaveEndpoint.ask[Boolean](replicateMsg)
         }
       }
@@ -235,6 +238,22 @@ class BlockManagerMasterEndpoint(
   private def removeExecutor(execId: String) {
     logInfo("Trying to remove executor " + execId + " from BlockManagerMaster.")
     blockManagerIdByExecutor.get(execId).foreach(removeBlockManager)
+  }
+
+  private def replicateAllRdds(executorIds: Seq[String]): Future[Seq[Boolean]] = {
+    val excluded = executorIds.flatMap(blockManagerIdByExecutor.get)
+
+    val replicateFs: Seq[Future[Boolean]] = for {
+      executorId <- executorIds
+      blockManagerId <- blockManagerIdByExecutor.get(executorId).toSeq
+      info <- blockManagerInfo.get(blockManagerId).toSeq
+      blockId <- info.blocks.keySet().asScala
+      if blockId.isRDD
+      replicas = blockLocations.getOrDefault(blockId, mutable.HashSet.empty[BlockManagerId]).toSeq
+      maxReps = replicas.size + 2
+    } yield info.slaveEndpoint.ask[Boolean](ReplicateBlock(blockId, replicas, excluded, maxReps))
+
+    Future.sequence(replicateFs)
   }
 
   /**

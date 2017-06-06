@@ -17,6 +17,8 @@
 
 package org.apache.spark
 
+import scala.concurrent.Future
+
 /**
  * A client that communicates with the cluster manager to request or kill executors.
  * This is currently supported only in YARN mode.
@@ -84,4 +86,17 @@ private[spark] trait ExecutorAllocationClient {
     val killedExecutors = killExecutors(Seq(executorId))
     killedExecutors.nonEmpty && killedExecutors(0).equals(executorId)
   }
+
+  /**
+   * Request that cluster mmanager replicate cached data off this executor
+   * @param executorIds All executors that should have all data replicated off
+   * @return seq of all executorids that were succesfully replicatedOff
+   */
+  def replicateAllRdds(executorIds: Seq[String]): Future[Seq[Boolean]]
+
+  /**
+   * Mark these executors as pending to be removed
+   * @param executorIds Executors that will be removed and should not accept new work.
+   */
+  def markForDeath(executorIds: Seq[String]): Unit
 }

@@ -29,7 +29,7 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.internal.config.{DYN_ALLOCATION_MAX_EXECUTORS, DYN_ALLOCATION_MIN_EXECUTORS}
 import org.apache.spark.metrics.source.Source
 import org.apache.spark.scheduler._
-import org.apache.spark.util.{Clock, SystemClock, ThreadUtils, Utils}
+import org.apache.spark.util._
 
 /**
  * An agent that dynamically allocates and removes executors based on the workload.
@@ -108,6 +108,10 @@ private[spark] class ExecutorAllocationManager(
   private val cachedExecutorIdleTimeoutS = conf.getTimeAsSeconds(
     "spark.dynamicAllocation.cachedExecutorIdleTimeout", s"${Integer.MAX_VALUE}s")
 
+  // whether or not to try and save cached data when executors are deallocated
+  private val replicateCachedData =
+    conf.getBoolean("spark.dynamicAllocation.recoverCachedData", false)
+
   // During testing, the methods to actually kill and add executors are mocked out
   private val testing = conf.getBoolean("spark.dynamicAllocation.testing", false)
 
@@ -168,6 +172,8 @@ private[spark] class ExecutorAllocationManager(
 
   // Host to possible task running on it, used for executor placement.
   private var hostToLocalTaskCount: Map[String, Int] = Map.empty
+
+  val timeout = RpcUtils.askRpcTimeout(conf)
 
   /**
    * Verify that the settings specified through the config are valid.
@@ -435,11 +441,22 @@ private[spark] class ExecutorAllocationManager(
     }
 
     // Send a request to the backend to kill this executor(s)
-    val executorsRemoved = if (testing) {
-      executorIdsToBeRemoved
-    } else {
+    val executorsRemoved: Seq[String] = if (testing) executorIdsToBeRemoved else {
+      // TODO bk make replicateCachedData dynamic
+      if (replicateCachedData) {
+        // TODO bk cleanup these logs
+        client.markForDeath(executorIdsToBeRemoved)
+        logDebug(s"Starting replicate process for $executorIdsToBeRemoved")
+        val start = System.currentTimeMillis()
+        val result = client.replicateAllRdds(executorIdsToBeRemoved)
+        timeout.awaitResult(result)
+        val end = System.currentTimeMillis()
+        logDebug(s"replicate then kill executors took ${end - start} ms")
+      }
+      logDebug(s"Starting kill process for $executorIdsToBeRemoved")
       client.killExecutors(executorIdsToBeRemoved)
     }
+
     // reset the newExecutorTotal to the existing number of executors
     newExecutorTotal = numExistingExecutors
     if (testing || executorsRemoved.nonEmpty) {
@@ -558,6 +575,7 @@ private[spark] class ExecutorAllocationManager(
         val hasCachedBlocks = SparkEnv.get.blockManager.master.hasCachedBlocks(executorId)
         val now = clock.getTimeMillis()
         val timeout = {
+          // TODO bk should graceful shutdown affect this timeout logic?
           if (hasCachedBlocks) {
             // Use a different timeout if the executor has cached blocks.
             now + cachedExecutorIdleTimeoutS * 1000
