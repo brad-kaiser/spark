@@ -18,6 +18,7 @@
 package org.apache.spark
 
 import scala.collection.mutable
+import scala.concurrent.Future
 
 import org.scalatest.{BeforeAndAfter, PrivateMethodTester}
 
@@ -1212,4 +1213,9 @@ private class DummyLocalSchedulerBackend (sc: SparkContext, sb: SchedulerBackend
   override def killExecutorsOnHost(host: String): Boolean = {
     false
   }
+
+  override def markForDeath(executorIds: Seq[String]): Unit = Seq.empty
+
+  override def replicateAllRdds(executorIds: Seq[String]): Future[Seq[Boolean]] =
+    Future.successful(Seq.empty)
 }
