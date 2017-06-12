@@ -28,6 +28,7 @@ import com.codahale.metrics.{Gauge, MetricRegistry}
 import org.apache.spark.internal.Logging
 import org.apache.spark.internal.config.{DYN_ALLOCATION_MAX_EXECUTORS, DYN_ALLOCATION_MIN_EXECUTORS}
 import org.apache.spark.metrics.source.Source
+import org.apache.spark.rpc.RpcEndpointRef
 import org.apache.spark.scheduler._
 import org.apache.spark.util._
 
@@ -81,6 +82,7 @@ import org.apache.spark.util._
 private[spark] class ExecutorAllocationManager(
     client: ExecutorAllocationClient,
     listenerBus: LiveListenerBus,
+    val gracefulShutdownEndpoint: RpcEndpointRef,
     conf: SparkConf)
   extends Logging {
 
@@ -240,6 +242,8 @@ private[spark] class ExecutorAllocationManager(
     executor.scheduleWithFixedDelay(scheduleTask, 0, intervalMillis, TimeUnit.MILLISECONDS)
 
     client.requestTotalExecutors(numExecutorsTarget, localityAwareTasks, hostToLocalTaskCount)
+
+    gracefulShutdownEndpoint.send(Test("XXXXXXXXXXXXXXXXXXX OMG XXXXXXXXXXXXXXXXXXXXX"))
   }
 
   /**

@@ -88,7 +88,7 @@ private[spark] trait ExecutorAllocationClient {
   }
 
   /**
-   * Request that cluster mmanager replicate cached data off this executor
+   * Request that cluster manager replicate cached data off this executor
    * @param executorIds All executors that should have all data replicated off
    * @return seq of all executorids that were succesfully replicatedOff
    */
