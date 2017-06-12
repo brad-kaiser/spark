@@ -421,48 +421,54 @@ private[spark] class ExecutorAllocationManager(
    * Returns the list of executors which are removed.
    */
   private def removeExecutors(executors: Seq[String]): Seq[String] = synchronized {
-    val executorIdsToBeRemoved = new ArrayBuffer[String]
 
     logInfo("Request to remove executorIds: " + executors.mkString(", "))
     val numExistingExecutors = allocationManager.executorIds.size - executorsPendingToRemove.size
 
-    var newExecutorTotal = numExistingExecutors
-    executors.foreach { executorIdToBeRemoved =>
-      if (newExecutorTotal - 1 < minNumExecutors) {
-        logDebug(s"Not removing idle executor $executorIdToBeRemoved because there are only " +
-          s"$newExecutorTotal executor(s) left (minimum number of executor limit $minNumExecutors)")
-      } else if (newExecutorTotal - 1 < numExecutorsTarget) {
-        logDebug(s"Not removing idle executor $executorIdToBeRemoved because there are only " +
-          s"$newExecutorTotal executor(s) left (number of executor target $numExecutorsTarget)")
-      } else if (canBeKilled(executorIdToBeRemoved)) {
-        executorIdsToBeRemoved += executorIdToBeRemoved
-        newExecutorTotal -= 1
-      }
+    val execCountFloor = Math.max(minNumExecutors, numExecutorsTarget)
+    val (execsToBeRemoved, execsToLeave) = executors.splitAt(numExistingExecutors - execCountFloor)
+    execsToLeave.foreach { execId =>
+      logDebug(s"Not removing idle executor $execId because it " +
+        s"would put us below the minimum limit of $minNumExecutors executors" +
+        s"or number of target executors $numExecutorsTarget")
     }
 
-    if (executorIdsToBeRemoved.isEmpty) {
+    if (execsToBeRemoved.isEmpty) {
       return Seq.empty[String]
     }
 
-    // Send a request to the backend to kill this executor(s)
-    val executorsRemoved: Seq[String] = if (testing) executorIdsToBeRemoved else {
-      // TODO bk make replicateCachedData dynamic
-      if (replicateCachedData) {
-        // TODO bk cleanup these logs
-        client.markForDeath(executorIdsToBeRemoved)
-        logDebug(s"Starting replicate process for $executorIdsToBeRemoved")
-        val start = System.currentTimeMillis()
-        val result = client.replicateAllRdds(executorIdsToBeRemoved)
-        timeout.awaitResult(result)
-        val end = System.currentTimeMillis()
-        logDebug(s"replicate then kill executors took ${end - start} ms")
-      }
-      logDebug(s"Starting kill process for $executorIdsToBeRemoved")
-      client.killExecutors(executorIdsToBeRemoved)
+    if (testing) {
+      removeExecutorsHelper(execsToBeRemoved, numExistingExecutors)
+    } else if (replicateCachedData) {
+      gracefullyRemove(execsToBeRemoved)
+      val removed = client.killExecutors(execsToBeRemoved)
+      removeExecutorsHelper(removed, numExistingExecutors)
+    } else {
+      logDebug(s"Starting kill process for $execsToBeRemoved")
+      val removed = client.killExecutors(execsToBeRemoved)
+      removeExecutorsHelper(removed, numExistingExecutors)
     }
+  }
+
+  private def gracefullyRemove(executerIds: Seq[String]): Seq[String] = {
+    client.markForDeath(executerIds)
+    logDebug(s"Starting replicate process for $executerIds")
+    val start = System.currentTimeMillis()
+    val result = client.replicateAllRdds(executerIds)
+    timeout.awaitResult(result)
+    val end = System.currentTimeMillis()
+    logDebug(s"replicate then kill executors took ${end - start} ms")
+    Seq.empty[String]
+  }
+
+  private def removeExecutorsHelper(
+      executorIdsToBeRemoved: Seq[String],
+      numExistingExecutors: Int): Seq[String] = {
+    logDebug(s"Starting kill process for $executorIdsToBeRemoved")
+    val executorsRemoved = client.killExecutors(executorIdsToBeRemoved)
 
     // reset the newExecutorTotal to the existing number of executors
-    newExecutorTotal = numExistingExecutors
+    var newExecutorTotal = numExistingExecutors
     if (testing || executorsRemoved.nonEmpty) {
       executorsRemoved.foreach { removedExecutorId =>
         newExecutorTotal -= 1
