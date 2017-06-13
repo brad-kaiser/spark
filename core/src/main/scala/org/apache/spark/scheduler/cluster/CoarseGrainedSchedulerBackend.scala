@@ -686,6 +686,7 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
   }
 
   override def markForDeath(executorIds: Seq[String]): Unit = synchronized {
+    logDebug(s"marking $executorIds for death")
     executorsToBeKilled ++= executorIds
   }
 }

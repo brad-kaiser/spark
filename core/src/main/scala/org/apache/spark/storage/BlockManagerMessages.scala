@@ -123,4 +123,9 @@ private[spark] object BlockManagerMessages {
   case class HasCachedBlocks(executorId: String) extends ToBlockManagerMaster
 
   case class ReplicateAllRdds(executorIds: Seq[String]) extends ToBlockManagerMaster
+
+  case class ReplicateFirstBlock(executorId: String, exclude: Seq[String])
+    extends ToBlockManagerMaster
+
+  case object GetAllLocations extends ToBlockManagerMaster
 }

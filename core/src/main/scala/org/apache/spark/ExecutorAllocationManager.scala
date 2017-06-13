@@ -82,13 +82,14 @@ import org.apache.spark.util._
 private[spark] class ExecutorAllocationManager(
     client: ExecutorAllocationClient,
     listenerBus: LiveListenerBus,
-    val gracefulShutdownEndpoint: RpcEndpointRef,
     conf: SparkConf)
   extends Logging {
 
   allocationManager =>
 
   import ExecutorAllocationManager._
+
+  var gracefulShutdownEndpoint: RpcEndpointRef = _
 
   // Lower and upper bounds on the number of executors.
   private val minNumExecutors = conf.get(DYN_ALLOCATION_MIN_EXECUTORS)
@@ -243,7 +244,12 @@ private[spark] class ExecutorAllocationManager(
 
     client.requestTotalExecutors(numExecutorsTarget, localityAwareTasks, hostToLocalTaskCount)
 
-    gracefulShutdownEndpoint.send(Test("XXXXXXXXXXXXXXXXXXX OMG XXXXXXXXXXXXXXXXXXXXX"))
+    gracefulShutdownEndpoint = SparkEnv.get.rpcEnv.setupEndpoint(
+      "graceful-shutdown",
+      GracefulShutdownEndpoint(
+        SparkEnv.get.rpcEnv,
+        SparkEnv.get.blockManager.master.driverEndpoint,
+        this))
   }
 
   /**
@@ -426,16 +432,20 @@ private[spark] class ExecutorAllocationManager(
     }
 
     if (testing) {
-      removeExecutorsHelper(execsToBeRemoved, numExistingExecutors)
+      acknowledgeExecutorKill(execsToBeRemoved)
     } else if (replicateCachedData) {
-      gracefullyRemove(execsToBeRemoved)
-      val removed = client.killExecutors(execsToBeRemoved)
-      removeExecutorsHelper(removed, numExistingExecutors)
+      startGracefulRemove(execsToBeRemoved)
     } else {
       logDebug(s"Starting kill process for $execsToBeRemoved")
-      val removed = client.killExecutors(execsToBeRemoved)
-      removeExecutorsHelper(removed, numExistingExecutors)
+      killExecutor(execsToBeRemoved)
     }
+  }
+
+  private def startGracefulRemove(executorIds: Seq[String]): Seq[String] = {
+    client.markForDeath(executorIds)
+    logDebug(s"Starting replicate process for $executorIds")
+    gracefulShutdownEndpoint.send(RemoveExecutors(executorIds))
+    executorIds
   }
 
   private def gracefullyRemove(executerIds: Seq[String]): Seq[String] = {
@@ -449,27 +459,27 @@ private[spark] class ExecutorAllocationManager(
     Seq.empty[String]
   }
 
-  private def removeExecutorsHelper(
-      executorIdsToBeRemoved: Seq[String],
-      numExistingExecutors: Int): Seq[String] = {
-    logDebug(s"Starting kill process for $executorIdsToBeRemoved")
-    val executorsRemoved = client.killExecutors(executorIdsToBeRemoved)
+  def killExecutor(executorIds: Seq[String]): Seq[String] = synchronized {
+    acknowledgeExecutorKill(askClientToKillExecutor(executorIds))
+  }
 
-    // reset the newExecutorTotal to the existing number of executors
-    var newExecutorTotal = numExistingExecutors
-    if (testing || executorsRemoved.nonEmpty) {
-      executorsRemoved.foreach { removedExecutorId =>
-        newExecutorTotal -= 1
-        logInfo(s"Removing executor $removedExecutorId because it has been idle for " +
-          s"$executorIdleTimeoutS seconds (new desired total will be $newExecutorTotal)")
-        executorsPendingToRemove.add(removedExecutorId)
-      }
-      executorsRemoved
-    } else {
+  private def askClientToKillExecutor(executorIds: Seq[String]): Seq[String] = {
+    logDebug(s"Starting kill process for $executorIds")
+    val result = client.killExecutors(executorIds)
+
+    if (result.isEmpty) {
       logWarning(s"Unable to reach the cluster manager to kill executor/s " +
-        s"${executorIdsToBeRemoved.mkString(",")} or no executor eligible to kill!")
-      Seq.empty[String]
+        s"${executorIds.mkString(",")} or no executor eligible to kill!")
     }
+
+    result
+  }
+
+  private def acknowledgeExecutorKill(executorsRemoved: Seq[String]): Seq[String] = synchronized {
+    executorsPendingToRemove --= executorsRemoved
+    logInfo(s"Removing executor $executorsRemoved because it has been idle for " +
+      s"$executorIdleTimeoutS seconds")
+    executorsRemoved
   }
 
   /**

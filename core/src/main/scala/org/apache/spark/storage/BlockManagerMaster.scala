@@ -239,6 +239,10 @@ class BlockManagerMaster(
   def replicateAllRdds(executorIds: Seq[String]): Future[Seq[Boolean]] =
     driverEndpoint.askSync[Future[Seq[Boolean]]](ReplicateAllRdds(executorIds))
 
+  // get location of all blocks on cluster. Should only be used for testing
+  def getAllLocations: Map[BlockId, Set[BlockManagerId]] =
+    driverEndpoint.askSync[Map[BlockId, Set[BlockManagerId]]](GetAllLocations)
+
   /** Send a one-way message to the master endpoint, to which we expect it to reply with true. */
   private def tell(message: Any) {
     if (!driverEndpoint.askSync[Boolean](message)) {
