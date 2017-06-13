@@ -87,7 +87,9 @@ class RecoverCachedDataSuite extends SparkFunSuite with Matchers with BeforeAndA
     getLocations(sc, rdd).foreach(println)
     getLocations(sc, rdd).forall{ case (id, map) => map.nonEmpty } shouldBe true
 
-    Thread.sleep(2000)
+    println("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX sleeping")
+    Thread.sleep(5000)
+    println("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX done")
     sc.getExecutorIds().size shouldBe 3
     getLocations(sc, rdd).foreach(println)
     getLocations(sc, rdd).forall{ case (id, map) => map.nonEmpty } shouldBe true

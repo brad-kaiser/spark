@@ -533,12 +533,8 @@ class SparkContext(config: SparkConf) extends Logging {
     _executorAllocationManager =
       if (dynamicAllocationEnabled) {
         schedulerBackend match {
-          case b: ExecutorAllocationClient =>
-            val gse = env.rpcEnv.setupEndpoint("graceful-shutdown",
-              GracefulShutdownEndpoint(env.rpcEnv))
-
-            Some(new ExecutorAllocationManager(
-              schedulerBackend.asInstanceOf[ExecutorAllocationClient], listenerBus, gse, _conf))
+          case b: ExecutorAllocationClient => Some(new ExecutorAllocationManager(
+              schedulerBackend.asInstanceOf[ExecutorAllocationClient], listenerBus, _conf))
           case _ =>
             None
         }

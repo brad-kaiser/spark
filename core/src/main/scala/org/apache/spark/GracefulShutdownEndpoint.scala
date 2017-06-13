@@ -20,30 +20,36 @@ package org.apache.spark
 import scala.collection.mutable
 
 import org.apache.spark.internal.Logging
-import org.apache.spark.rpc.{RpcCallContext, RpcEndpointRef, RpcEnv, ThreadSafeRpcEndpoint}
+import org.apache.spark.rpc.{RpcEndpointRef, RpcEnv, ThreadSafeRpcEndpoint}
+import org.apache.spark.storage.BlockManagerMessages.ReplicateFirstBlock
 
 case class GracefulShutdownEndpoint(
-    rpcEnv: RpcEnv)
+    rpcEnv: RpcEnv,
+    blockManagerMaster: RpcEndpointRef,
+    executorAllocationManager: ExecutorAllocationManager)
   extends ThreadSafeRpcEndpoint with Logging {
 
   private val executorsBeingRemoved: mutable.Set[String] = mutable.HashSet.empty[String]
 
   override def receive: PartialFunction[Any, Unit] = {
-    case RemoveExecutor(executorId) => executorsBeingRemoved += executorId
-    case ExecutorHasMoreBlocks(executorId) => // TODO bk request another replication
-    case ExecutorIsDone(executorId) => executorsBeingRemoved -= executorId
-    case Test(s) => logWarning(s)
+    case RemoveExecutors(executorIds) =>
+      logDebug("starting to remove Executor")
+      executorsBeingRemoved ++= executorIds
+      executorIds.foreach { id =>
+        blockManagerMaster.ask(ReplicateFirstBlock(id, executorsBeingRemoved.toSeq))
+      }
+    case ExecutorHasMoreBlocks(executorId) =>
+      logDebug("replicated one block, executor has more")
+      blockManagerMaster.send(ReplicateFirstBlock(executorId, executorsBeingRemoved.toSeq))
+    case ExecutorIsDone(executorId) =>
+      logDebug(s"done replicating blocks for $executorId")
+      executorsBeingRemoved -= executorId
+      executorAllocationManager.killExecutor(Seq(executorId))
   }
-
-//  override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
-//
-//  }
-
 }
 
 sealed trait GracefulShutdownMessages
-case class RemoveExecutor(executorId: String) extends GracefulShutdownMessages
+case class RemoveExecutors(executorIds: Seq[String]) extends GracefulShutdownMessages
 case class ExecutorHasMoreBlocks(executorId: String) extends GracefulShutdownMessages
 case class ExecutorIsDone(executorId: String) extends GracefulShutdownMessages
-case class Test(s: String) extends GracefulShutdownMessages
 
