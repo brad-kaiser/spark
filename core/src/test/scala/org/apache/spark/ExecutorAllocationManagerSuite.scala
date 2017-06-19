@@ -1215,7 +1215,4 @@ private class DummyLocalSchedulerBackend (sc: SparkContext, sb: SchedulerBackend
   }
 
   override def markForDeath(executorIds: Seq[String]): Unit = Seq.empty
-
-  override def replicateAllRdds(executorIds: Seq[String]): Future[Seq[Boolean]] =
-    Future.successful(Seq.empty)
 }

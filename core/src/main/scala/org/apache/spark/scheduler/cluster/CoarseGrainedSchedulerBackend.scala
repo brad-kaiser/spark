@@ -683,14 +683,6 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
   }
 
   /**
-   * Will Replicate all rdds of these executors if possible
-   * @param executorIds All executors that should have all data replicated off
-   * @return seq of all executorids that were succesfully replicatedOff
-   */
-  def replicateAllRdds(executorIds: Seq[String]): Future[Seq[Boolean]] =
-    scheduler.sc.env.blockManager.master.replicateAllRdds(executorIds)
-
-  /**
    * Kill the given list of executors through the cluster manager.
    * @return whether the kill request is acknowledged.
    */

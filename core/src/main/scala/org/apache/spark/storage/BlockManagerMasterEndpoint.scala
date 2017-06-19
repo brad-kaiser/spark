@@ -24,7 +24,7 @@ import scala.collection.mutable
 import scala.concurrent.{ExecutionContext, Future}
 import scala.util.{Failure, Random, Success}
 
-import org.apache.spark.{ExecutorHasMoreBlocks, ExecutorIsDone, SparkConf}
+import org.apache.spark.SparkConf
 import org.apache.spark.annotation.DeveloperApi
 import org.apache.spark.internal.Logging
 import org.apache.spark.rpc.{RpcCallContext, RpcEndpointRef, RpcEnv, ThreadSafeRpcEndpoint}
@@ -97,6 +97,8 @@ class BlockManagerMasterEndpoint(
     case GetStorageStatus =>
       context.reply(storageStatus)
 
+    case GetCachedBlocks(executorId) => context.reply(getCachedBlocks(executorId))
+
     case GetBlockStatus(blockId, askSlaves) =>
       context.reply(blockStatus(blockId, askSlaves))
 
@@ -120,11 +122,9 @@ class BlockManagerMasterEndpoint(
       removeExecutor(execId)
       context.reply(true)
 
-    case ReplicateAllRdds(execIds) => context.reply(replicateAllRdds(execIds))
-
-    case ReplicateFirstBlock(execId, exclude) =>
+    case ReplicateOneBlock(execId, blockId, exclude) =>
       logDebug(s"Replicating first block on $execId")
-      replicateFirstBlock(execId, exclude, context)
+      context.reply(replicateOneBlock(execId, blockId, exclude))
 
     case StopBlockManagerMaster =>
       context.reply(true)
@@ -144,8 +144,6 @@ class BlockManagerMasterEndpoint(
           }
         case None => context.reply(false)
       }
-
-    case GetAllLocations => context.reply(getAllLocations)
   }
 
   private def removeRdd(rddId: Int): Future[Seq[Int]] = {
@@ -246,44 +244,30 @@ class BlockManagerMasterEndpoint(
     blockManagerIdByExecutor.get(execId).foreach(removeBlockManager)
   }
 
-  private def replicateAllRdds(executorIds: Seq[String]): Future[Seq[Boolean]] = {
-    val excluded = executorIds.flatMap(blockManagerIdByExecutor.get)
-
-    val replicateFs: Seq[Future[Boolean]] = for {
-      executorId <- executorIds
-      blockManagerId <- blockManagerIdByExecutor.get(executorId).toSeq
-      info <- blockManagerInfo.get(blockManagerId).toSeq
-      blockId <- info.blocks.keySet().asScala
-      if blockId.isRDD
-      replicas = blockLocations.getOrDefault(blockId, mutable.HashSet.empty[BlockManagerId]).toSeq
-      maxReps = replicas.size + 2
-    } yield info.slaveEndpoint.ask[Boolean](ReplicateBlock(blockId, replicas, excluded, maxReps))
-
-    Future.sequence(replicateFs)
-  }
-
-  private def replicateFirstBlock(
+  private def replicateOneBlock(
       execId: String,
-      excludeExecutors: Seq[String],
-      context: RpcCallContext): Unit = {
+      blockId: BlockId,
+      excludeExecutors: Seq[String]): Future[Boolean] = {
+    logDebug(s"replicating block $blockId")
     val excluded = excludeExecutors.flatMap(blockManagerIdByExecutor.get)
-
-    val request: Option[Future[Boolean]] = for {
+    val response: Option[Future[Boolean]] = for {
       blockManagerId <- blockManagerIdByExecutor.get(execId)
       info <- blockManagerInfo.get(blockManagerId)
-      blockId <- info.blocks.asScala.keys.find(_.isRDD)
-      replicas = blockLocations.get(blockId)
-      maxReps = replicas.size + 2
-    } yield info.slaveEndpoint.ask[Boolean](
-      ReplicateBlock(blockId, replicas.toSeq, excluded, maxReps))
+      replicaSet <- blockLocations.asScala.get(blockId)
+      replicas = replicaSet.toSeq
+      maxReps = replicaSet.size + 2
+    } yield info.slaveEndpoint.ask[Boolean](ReplicateBlock(blockId, replicas, excluded, maxReps))
 
-    logDebug(s"replicating block one block")
+    response.getOrElse(Future.successful(false))
+  }
 
-    request.getOrElse(Future.successful(false)).onComplete {
-      case Success(true) => context.reply(ExecutorHasMoreBlocks(execId))
-      case Success(false) => context.reply(ExecutorIsDone(execId))
-      case Failure(f) => context.reply(ExecutorIsDone(execId))
-    }
+  private def getCachedBlocks(executorId: String): collection.Set[BlockId] = {
+    val cachedBlocks = for {
+      blockManagerId <- blockManagerIdByExecutor.get(executorId)
+      info <- blockManagerInfo.get(blockManagerId)
+    } yield info.cachedBlocks
+
+    cachedBlocks.getOrElse(Set.empty)
   }
 
   /**
@@ -475,12 +459,6 @@ class BlockManagerMasterEndpoint(
       blockIds: Array[BlockId]): IndexedSeq[Seq[BlockManagerId]] = {
     blockIds.map(blockId => getLocations(blockId))
   }
-
-  private def getAllLocations =
-    blockLocations.asScala.foldLeft(Map.empty[BlockId, Set[BlockManagerId]]) {
-      case (acc, (k, v)) => acc + (k -> v.toSet)
-    }
-
 
   /** Get the list of the peers of the given block manager */
   private def getPeers(blockManagerId: BlockManagerId): Seq[BlockManagerId] = {

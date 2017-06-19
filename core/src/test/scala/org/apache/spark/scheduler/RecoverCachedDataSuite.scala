@@ -113,6 +113,52 @@ class RecoverCachedDataSuite extends SparkFunSuite with Matchers with BeforeAndA
     getLocations(sc, rdd).forall{ case (id, map) => map.nonEmpty } shouldBe true
   }
 
+  test("blocks spilled to disk are properly cleaned up after dynamic deallocation.") {
+    conf.set("spark.dynamicAllocation.enabled", "true")
+
+    sc = new SparkContext(conf)
+    sc.jobProgressListener.waitUntilExecutorsUp(4, 60000)
+
+    val rdd = sc.parallelize(1 to 100000, 4) // cache on all 4 executors
+      .map(_ * 4L)
+      .persist(StorageLevel.DISK_ONLY)
+
+    rdd.reduce(_ + _) shouldBe 20000200000L // realize the cache
+    getLocations(sc, rdd).foreach(println)
+
+    Thread.sleep(10000)
+
+
+
+  }
+
+  test("Executors should not accept new work while replicating away data before deallocation") {
+    conf.set("spark.dynamicAllocation.minExecutors", "1")
+
+    sc = new SparkContext(conf)
+    sc.jobProgressListener.waitUntilExecutorsUp(4, 60000)
+
+    val rdd = sc.parallelize(1 to 100000, 4).map(_ * 4L).cache() // cache on all 4 executors
+    rdd.reduce(_ + _) shouldBe 20000200000L // realize the cache
+    getLocations(sc, rdd).foreach(println)
+
+    Thread.sleep(1002) // sleep long enough to trigger deallocation
+
+    val rdd2 = sc.parallelize(1 to 100000, 4).map(_ * 4L).cache() // should be created on 1 exe
+    rdd2.reduce(_ + _) shouldBe 20000200000L
+
+    val executorIds = for {
+      maps <- getLocations(sc, rdd2).values
+      blockManagerId <- maps.keys
+    } yield blockManagerId.executorId
+
+    executorIds.foreach(println)
+
+    // sometimes the ExecutorAllocationManager only shuts down 2 executors not 3
+    // So all blocks should be on one or two remaining executors
+    executorIds.toSet.size <= 2 shouldBe true
+  }
+
   test("When node memory is limited we are intelligent about replicating data ") {}
 
 

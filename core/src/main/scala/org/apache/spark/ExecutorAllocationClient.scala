@@ -88,13 +88,6 @@ private[spark] trait ExecutorAllocationClient {
   }
 
   /**
-   * Request that cluster manager replicate cached data off this executor
-   * @param executorIds All executors that should have all data replicated off
-   * @return seq of all executorids that were succesfully replicatedOff
-   */
-  def replicateAllRdds(executorIds: Seq[String]): Future[Seq[Boolean]]
-
-  /**
    * Mark these executors as pending to be removed
    * @param executorIds Executors that will be removed and should not accept new work.
    */

@@ -89,7 +89,7 @@ private[spark] class ExecutorAllocationManager(
 
   import ExecutorAllocationManager._
 
-  var gracefulShutdownEndpoint: RpcEndpointRef = _
+  var gracefulShutdowner: GracefulShutdowner = _
 
   // Lower and upper bounds on the number of executors.
   private val minNumExecutors = conf.get(DYN_ALLOCATION_MIN_EXECUTORS)
@@ -244,12 +244,7 @@ private[spark] class ExecutorAllocationManager(
 
     client.requestTotalExecutors(numExecutorsTarget, localityAwareTasks, hostToLocalTaskCount)
 
-    gracefulShutdownEndpoint = SparkEnv.get.rpcEnv.setupEndpoint(
-      "graceful-shutdown",
-      GracefulShutdownEndpoint(
-        SparkEnv.get.rpcEnv,
-        SparkEnv.get.blockManager.master.driverEndpoint,
-        this))
+    gracefulShutdowner = GracefulShutdowner(SparkEnv.get.rpcEnv, this)
   }
 
   /**
@@ -456,19 +451,8 @@ private[spark] class ExecutorAllocationManager(
   private def startGracefulRemove(executorIds: Seq[String]): Seq[String] = {
     client.markForDeath(executorIds)
     logDebug(s"Starting replicate process for $executorIds")
-    gracefulShutdownEndpoint.send(RemoveExecutors(executorIds))
+    gracefulShutdowner.shutdown(executorIds)
     executorIds
-  }
-
-  private def gracefullyRemove(executerIds: Seq[String]): Seq[String] = {
-    client.markForDeath(executerIds)
-    logDebug(s"Starting replicate process for $executerIds")
-    val start = System.currentTimeMillis()
-    val result = client.replicateAllRdds(executerIds)
-    timeout.awaitResult(result)
-    val end = System.currentTimeMillis()
-    logDebug(s"replicate then kill executors took ${end - start} ms")
-    Seq.empty[String]
   }
 
   def killExecutor(executorIds: Seq[String]): Seq[String] = synchronized {
