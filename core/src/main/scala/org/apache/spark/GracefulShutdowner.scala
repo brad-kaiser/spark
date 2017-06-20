@@ -28,6 +28,7 @@ import org.apache.spark.GracefulShutdowner._
 import org.apache.spark.storage.{BlockId, RDDBlockId}
 
 // TODO bk check for tasks?
+// TODO bk use better executionContext
 final private[spark] case class GracefulShutdowner(endpoint: RpcEndpointRef) extends Logging {
   import scala.concurrent.ExecutionContext.Implicits.global
 
@@ -39,17 +40,14 @@ final private[spark] case class GracefulShutdowner(endpoint: RpcEndpointRef) ext
     }
   }
 
-  private def saveBlocks(executorId: String) =
-    endpoint.askSync[Future[Boolean]](SaveFirstBlock(executorId))
-      .onComplete(saveBlocksHandler(executorId))
-
-  private def saveBlocksHandler(executorId: String)(r: Try[Boolean]): Unit = r match {
-    case scala.util.Success(true) => saveBlocks(executorId)
-    case scala.util.Success(false) => shutdown(Seq(executorId))
-    case Failure(f) => endpoint.send(KillExecutor(executorId))
-  }
+  private def saveBlocks(executorId: String): Unit = endpoint
+    .askSync[Future[Boolean]](SaveFirstBlock(executorId))
+    .onComplete {
+      case scala.util.Success(true) => saveBlocks(executorId)
+      case scala.util.Success(false) => shutdown(Seq(executorId))
+      case Failure(f) => endpoint.send(KillExecutor(executorId))
+    }
 }
-
 
 object GracefulShutdowner {
   val endpointName = "graceful-shutdown"
@@ -72,50 +70,56 @@ object GracefulShutdowner {
       mutable.HashMap.empty[String, mutable.HashSet[RDDBlockId]]
         .withDefault(_ => mutable.HashSet.empty[RDDBlockId])
 
-    override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
-      case SaveFirstBlock(executorId) =>
-        logDebug(s"saveFirstBlock $executorId")
-        blocksToSave.get(executorId) match {
-          case Some(p) if p.nonEmpty =>
-            val blockId = p.dequeue()
-            println(blockId)
-            savedBlocks.put(executorId, savedBlocks(executorId) += blockId)
-            println(savedBlocks)
-
-            context.reply(
-              blockManagerMasterEndpoint.askSync[Future[Boolean]](
-                ReplicateOneBlock(executorId, blockId, blocksToSave.keys.toSeq))
-            )
-          case _ => context.reply(Future.successful(false))
-        }
-      case GetBlocks(executorIds) =>
-        logDebug(s"getting all RDD blocks for $executorIds")
-        val result: Map[String, EmptyState] = executorIds.map { executorId =>
-          val blocks: mutable.Set[RDDBlockId] = blockManagerMasterEndpoint
-            .askSync[collection.Set[BlockId]](GetCachedBlocks(executorId))
-            .flatMap(_.asRDDId)(collection.breakOut)
-
-          blocks --= savedBlocks(executorId)
-
-          val queue = mutable.PriorityQueue[RDDBlockId](blocks.toSeq: _*)(Ordering.by(_.rddId))
-          blocksToSave += (executorId -> queue)
-
-          val isEmpty = if (queue.isEmpty) Empty else NotEmpty
-
-          executorId -> isEmpty
-
-        }(collection.breakOut)
-
-        context.reply(result)
-    }
-
     override def receive: PartialFunction[Any, Unit] = {
-      case KillExecutor(executorId) =>
-        logDebug(s"done replicating blocks for $executorId")
-        blocksToSave -= executorId
-        executorAllocationManager.killExecutor(Seq(executorId))
+      case KillExecutor(executorId) => killExecutor(executorId)
     }
+
+    override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
+      case SaveFirstBlock(executorId) => context.reply(saveFirstBlock(executorId))
+      case GetBlocks(executorIds) => context.reply(getBlocks(executorIds))
+    }
+
+    private def getBlocks(executorIds: Seq[String]): Map[String, EmptyState] = {
+      logDebug(s"getting all RDD blocks for $executorIds")
+      executorIds.map { executorId =>
+        val blocks: mutable.Set[RDDBlockId] = blockManagerMasterEndpoint
+          .askSync[collection.Set[BlockId]](GetCachedBlocks(executorId))
+          .flatMap(_.asRDDId)(collection.breakOut)
+
+        blocks --= savedBlocks(executorId)
+
+        val queue = mutable.PriorityQueue[RDDBlockId](blocks.toSeq: _*)(Ordering.by(_.rddId))
+        blocksToSave += (executorId -> queue)
+
+        val isEmpty = if (queue.isEmpty) Empty else NotEmpty
+
+        executorId -> isEmpty
+
+      }(collection.breakOut)
+    }
+
+    private def saveFirstBlock(executorId: String): Future[Boolean] = {
+      logDebug(s"saveFirstBlock $executorId")
+      blocksToSave.get(executorId) match {
+        case Some(p) if p.nonEmpty =>
+          val blockId = p.dequeue()
+          savedBlocks.put(executorId, savedBlocks(executorId) += blockId)
+
+          blockManagerMasterEndpoint.askSync[Future[Boolean]](
+            ReplicateOneBlock(executorId, blockId, blocksToSave.keys.toSeq)
+          )
+        case _ => Future.successful(false)
+      }
+    }
+
+    private def killExecutor(executorId: String): Unit = {
+      logDebug(s"done replicating blocks for $executorId")
+      blocksToSave -= executorId
+      executorAllocationManager.killExecutor(Seq(executorId))
+    }
+
   }
+
 
   sealed trait GracefulShutdownMessage
   final case class GetBlocks(executorIds: Seq[String]) extends GracefulShutdownMessage
