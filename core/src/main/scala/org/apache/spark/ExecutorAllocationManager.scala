@@ -290,6 +290,8 @@ private[spark] class ExecutorAllocationManager(
   private def schedule(): Unit = synchronized {
     val now = clock.getTimeMillis
 
+    logDebug(s" now: $now removetimes: $removeTimes")
+
     updateAndSyncNumExecutorsTarget(now)
 
     val executorIdsToBeRemoved = ArrayBuffer[String]()
@@ -425,6 +427,10 @@ private[spark] class ExecutorAllocationManager(
 
     logInfo("Request to remove executorIds: " + executors.mkString(", "))
     val numExistingExecutors = allocationManager.executorIds.size - executorsPendingToRemove.size
+    val nonPendingExecutors = executorIds -- executorsPendingToRemove
+
+    logInfo(s"nonPending $nonPendingExecutors execids $executorIds" +
+      s" pending $executorsPendingToRemove")
 
     val execCountFloor = Math.max(minNumExecutors, numExecutorsTarget)
     val (execsToBeRemoved, execsToLeave) = executors.splitAt(numExistingExecutors - execCountFloor)
@@ -472,7 +478,7 @@ private[spark] class ExecutorAllocationManager(
   }
 
   private def acknowledgeExecutorKill(executorsRemoved: Seq[String]): Seq[String] = synchronized {
-    executorsPendingToRemove --= executorsRemoved
+    executorsPendingToRemove ++= executorsRemoved
     logInfo(s"Removing executor $executorsRemoved because it has been idle for " +
       s"$executorIdleTimeoutS seconds")
     executorsRemoved
@@ -579,7 +585,6 @@ private[spark] class ExecutorAllocationManager(
         val hasCachedBlocks = SparkEnv.get.blockManager.master.hasCachedBlocks(executorId)
         val now = clock.getTimeMillis()
         val timeout = {
-          // TODO bk should graceful shutdown affect this timeout logic?
           if (hasCachedBlocks) {
             // Use a different timeout if the executor has cached blocks.
             now + cachedExecutorIdleTimeoutS * 1000
