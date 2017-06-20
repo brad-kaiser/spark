@@ -27,20 +27,15 @@ import org.apache.spark.storage.BlockManagerMessages.{GetCachedBlocks, Replicate
 import org.apache.spark.GracefulShutdowner._
 import org.apache.spark.storage.{BlockId, RDDBlockId}
 
-// TODO bk fix BlockManagerMaster methods to refer to new Messages
-// TODO bk fix BlockManagerMaster so that it moves newer blocks
 // TODO bk check for tasks?
-// TODO bk don't remove blocks from executor so that we can revivify if we want?
 final private[spark] case class GracefulShutdowner(endpoint: RpcEndpointRef) extends Logging {
   import scala.concurrent.ExecutionContext.Implicits.global
 
-  def shutdown(executorIds: Seq[String]): Unit = executorIds.foreach(shutdownExecutor)
-
-  private def shutdownExecutor(executorId: String) = {
-    logDebug(s"shutdownExecutor $executorId")
-    endpoint.askSync[EmptyState](GetBlocks(executorId)) match {
-      case Empty => endpoint.send(KillExecutor(executorId))
-      case NotEmpty => saveBlocks(executorId)
+  def shutdown(executorIds: Seq[String]): Unit = {
+    logDebug(s"shutdown $executorIds")
+    endpoint.askSync[Map[String, EmptyState]](GetBlocks(executorIds)).foreach {
+      case (executorId, Empty) => endpoint.send(KillExecutor(executorId))
+      case (executorId, NotEmpty) => saveBlocks(executorId)
     }
   }
 
@@ -50,13 +45,12 @@ final private[spark] case class GracefulShutdowner(endpoint: RpcEndpointRef) ext
 
   private def saveBlocksHandler(executorId: String)(r: Try[Boolean]): Unit = r match {
     case scala.util.Success(true) => saveBlocks(executorId)
-    case scala.util.Success(false) => shutdownExecutor(executorId)
+    case scala.util.Success(false) => shutdown(Seq(executorId))
     case Failure(f) => endpoint.send(KillExecutor(executorId))
   }
 }
 
 
-// TODO bk maintain list of blocks here. Chew threw them
 object GracefulShutdowner {
   val endpointName = "graceful-shutdown"
 
@@ -94,23 +88,24 @@ object GracefulShutdowner {
             )
           case _ => context.reply(Future.successful(false))
         }
-      case GetBlocks(executorId) =>
-        logDebug(s"getting all RDD blocks for $executorId")
-        val blocks: mutable.Set[RDDBlockId] = blockManagerMasterEndpoint
-          .askSync[collection.Set[BlockId]](GetCachedBlocks(executorId))
-          .flatMap(_.asRDDId)(collection.breakOut)
+      case GetBlocks(executorIds) =>
+        logDebug(s"getting all RDD blocks for $executorIds")
+        val result: Map[String, EmptyState] = executorIds.map { executorId =>
+          val blocks: mutable.Set[RDDBlockId] = blockManagerMasterEndpoint
+            .askSync[collection.Set[BlockId]](GetCachedBlocks(executorId))
+            .flatMap(_.asRDDId)(collection.breakOut)
 
-        println(blocks)
-        println(savedBlocks)
-        blocks --= savedBlocks(executorId)
-        println(blocks)
+          blocks --= savedBlocks(executorId)
 
-        val queue = mutable.PriorityQueue[RDDBlockId](blocks.toSeq: _*)(Ordering.by(_.rddId))
-        blocksToSave += (executorId -> queue)
+          val queue = mutable.PriorityQueue[RDDBlockId](blocks.toSeq: _*)(Ordering.by(_.rddId))
+          blocksToSave += (executorId -> queue)
 
+          val isEmpty = if (queue.isEmpty) Empty else NotEmpty
 
-        val result = if (queue.isEmpty) Empty else NotEmpty
-        println(result)
+          executorId -> isEmpty
+
+        }(collection.breakOut)
+
         context.reply(result)
     }
 
@@ -123,7 +118,7 @@ object GracefulShutdowner {
   }
 
   sealed trait GracefulShutdownMessage
-  final case class GetBlocks(executorId: String) extends GracefulShutdownMessage
+  final case class GetBlocks(executorIds: Seq[String]) extends GracefulShutdownMessage
   final case class SaveFirstBlock(executorId: String) extends GracefulShutdownMessage
   final case class KillExecutor(executorId: String) extends GracefulShutdownMessage
 
