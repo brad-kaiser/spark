@@ -80,15 +80,17 @@ class RecoverCachedDataSuite extends SparkFunSuite with Matchers with BeforeAndA
   test("cached data is replicated before dynamic de-allocation") {
     sc = new SparkContext(conf)
     sc.jobProgressListener.waitUntilExecutorsUp(4, 60000)
+    println("||||||||||||||||||||||||||||||||||||||||||||| up")
 
     val rdd = sc.parallelize(1 to 1000, 4).map(_ * 4).cache()
     rdd.reduce(_ + _) shouldBe 2002000
+    println("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! computed")
     sc.getExecutorIds().size shouldBe 4
     getLocations(sc, rdd).foreach(println)
     getLocations(sc, rdd).forall{ case (id, map) => map.nonEmpty } shouldBe true
 
     println("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX sleeping")
-    Thread.sleep(2000)
+    Thread.sleep(3000)
     println("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX done")
     sc.getExecutorIds().size shouldBe 3
     getLocations(sc, rdd).foreach(println)

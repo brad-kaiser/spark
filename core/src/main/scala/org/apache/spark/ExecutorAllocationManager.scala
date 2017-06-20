@@ -290,7 +290,7 @@ private[spark] class ExecutorAllocationManager(
   private def schedule(): Unit = synchronized {
     val now = clock.getTimeMillis
 
-    logDebug(s" now: $now removetimes: $removeTimes")
+//    logDebug(s" now: $now removetimes: $removeTimes")
 
     updateAndSyncNumExecutorsTarget(now)
 
@@ -456,6 +456,7 @@ private[spark] class ExecutorAllocationManager(
 
   private def startGracefulRemove(executorIds: Seq[String]): Seq[String] = {
     client.markForDeath(executorIds)
+    executorsPendingToRemove ++= executorIds
     logDebug(s"Starting replicate process for $executorIds")
     gracefulShutdowner.shutdown(executorIds)
     executorIds
