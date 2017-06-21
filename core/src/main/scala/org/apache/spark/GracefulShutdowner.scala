@@ -18,18 +18,20 @@
 package org.apache.spark
 
 import scala.collection.mutable
-import scala.concurrent.Future
+import scala.concurrent.{ExecutionContext, Future}
 import scala.util.Failure
 
 import org.apache.spark.internal.Logging
 import org.apache.spark.rpc.{RpcCallContext, RpcEndpointRef, RpcEnv, ThreadSafeRpcEndpoint}
 import org.apache.spark.storage.{BlockId, RDDBlockId}
 import org.apache.spark.storage.BlockManagerMessages.{GetCachedBlocks, ReplicateOneBlock}
+import org.apache.spark.util.ThreadUtils
 
 // TODO bk check for tasks?
-// TODO bk use better executionContext
 final private[spark] case class GracefulShutdowner(endpoint: RpcEndpointRef) extends Logging {
-  import scala.concurrent.ExecutionContext.Implicits.global
+  private val asyncThreadPool =
+    ThreadUtils.newDaemonCachedThreadPool("graceful-shutdown-thread-pool")
+  private implicit val asyncExecutionContext = ExecutionContext.fromExecutorService(asyncThreadPool)
 
   def shutdown(executorIds: Seq[String]): Unit = {
     logDebug(s"shutdown $executorIds")

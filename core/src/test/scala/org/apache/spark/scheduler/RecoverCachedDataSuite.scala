@@ -144,7 +144,9 @@ class RecoverCachedDataSuite extends SparkFunSuite with Matchers with BeforeAndA
     rdd.reduce(_ + _) shouldBe 20000200000L // realize the cache
     getLocations(sc, rdd).foreach(println)
 
-    Thread.sleep(1002) // sleep long enough to trigger deallocation
+    println("XXX SLEEPING")
+    Thread.sleep(1102) // sleep long enough to trigger deallocation
+    println("XXX DONE")
 
     val rdd2 = sc.parallelize(1 to 100000, 4).map(_ * 4L).cache() // should be created on 1 exe
     rdd2.reduce(_ + _) shouldBe 20000200000L
@@ -158,7 +160,7 @@ class RecoverCachedDataSuite extends SparkFunSuite with Matchers with BeforeAndA
 
     // sometimes the ExecutorAllocationManager only shuts down 2 executors not 3
     // So all blocks should be on one or two remaining executors
-    executorIds.toSet.size <= 2 shouldBe true
+    executorIds.toSet.size shouldBe 1
   }
 
   test("When node memory is limited we are intelligent about replicating data ") {}
