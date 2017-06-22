@@ -17,6 +17,8 @@
 
 package org.apache.spark
 
+import java.util.concurrent.{Executors, TimeUnit}
+
 import scala.collection.mutable
 import scala.concurrent.{ExecutionContext, Future}
 import scala.util.Failure
@@ -28,14 +30,28 @@ import org.apache.spark.storage.BlockManagerMessages.{GetCachedBlocks, Replicate
 import org.apache.spark.util.ThreadUtils
 
 // TODO bk check for tasks?
-final private[spark] case class GracefulShutdowner(endpoint: RpcEndpointRef) extends Logging {
+// TODO bk make force kill timeout configurable
+final private[spark] case class GracefulShutdown(
+    endpoint: RpcEndpointRef,
+    conf: SparkConf)
+  extends Logging {
+
+  private val forceKillAfterS =
+    conf.getTimeAsSeconds("spark.dynamicAllocation.recoverCachedData", "120s")
   private val asyncThreadPool =
     ThreadUtils.newDaemonCachedThreadPool("graceful-shutdown-thread-pool")
   private implicit val asyncExecutionContext = ExecutionContext.fromExecutorService(asyncThreadPool)
+  private val killScheduler = Executors.newSingleThreadScheduledExecutor
 
   def shutdown(executorIds: Seq[String]): Unit = {
     logDebug(s"shutdown $executorIds")
-    endpoint.askSync[Map[String, EmptyState]](GetBlocks(executorIds)).foreach {
+    killScheduler.schedule(ForceKill(executorIds), forceKillAfterS, TimeUnit.SECONDS)
+    checkBlocks(executorIds)
+  }
+
+  private def checkBlocks(executorIds: Seq[String]): Unit = {
+    val r = endpoint.askSync[Map[String, EmptyState]](GetBlocks(executorIds))
+      r.foreach {
       case (executorId, Empty) => endpoint.send(KillExecutor(executorId))
       case (executorId, NotEmpty) => saveBlocks(executorId)
     }
@@ -45,20 +61,24 @@ final private[spark] case class GracefulShutdowner(endpoint: RpcEndpointRef) ext
     .askSync[Future[Boolean]](SaveFirstBlock(executorId))
     .onComplete {
       case scala.util.Success(true) => saveBlocks(executorId)
-      case scala.util.Success(false) => shutdown(Seq(executorId))
+      case scala.util.Success(false) => checkBlocks(Seq(executorId))
       case Failure(f) =>
         logWarning("Error trying to replicate blocks", f)
         endpoint.send(KillExecutor(executorId))
     }
+
+  private case class ForceKill(executorIds: Seq[String]) extends Runnable {
+    def run(): Unit = executorIds.foreach(id => endpoint.send(KillExecutor(id)))
+  }
 }
 
-object GracefulShutdowner {
+object GracefulShutdown {
   val endpointName = "graceful-shutdown"
 
-  def apply(rpcEnv: RpcEnv, eam: ExecutorAllocationManager): GracefulShutdowner = {
+  def apply(rpcEnv: RpcEnv, eam: ExecutorAllocationManager, conf: SparkConf): GracefulShutdown = {
     val endpoint = rpcEnv.setupEndpoint(endpointName, GracefulShutdownEndpoint(rpcEnv,
       SparkEnv.get.blockManager.master.driverEndpoint, eam))
-    GracefulShutdowner(endpoint)
+    GracefulShutdown(endpoint, conf)
   }
 }
 

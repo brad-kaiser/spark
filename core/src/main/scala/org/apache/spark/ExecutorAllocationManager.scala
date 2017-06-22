@@ -88,7 +88,7 @@ private[spark] class ExecutorAllocationManager(
 
   import ExecutorAllocationManager._
 
-  var gracefulShutdowner: GracefulShutdowner = _
+  var gracefulShutdowner: GracefulShutdown = _
 
   // Lower and upper bounds on the number of executors.
   private val minNumExecutors = conf.get(DYN_ALLOCATION_MIN_EXECUTORS)
@@ -241,7 +241,7 @@ private[spark] class ExecutorAllocationManager(
 
     client.requestTotalExecutors(numExecutorsTarget, localityAwareTasks, hostToLocalTaskCount)
 
-    gracefulShutdowner = GracefulShutdowner(SparkEnv.get.rpcEnv, this)
+    gracefulShutdowner = GracefulShutdown(SparkEnv.get.rpcEnv, this, conf)
   }
 
   /**
