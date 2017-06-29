@@ -17,7 +17,7 @@
 
 package org.apache.spark
 
-import java.util.concurrent.{Executors, TimeUnit}
+import java.util.concurrent.{Executors, ScheduledFuture, TimeUnit}
 
 import scala.collection.mutable
 import scala.concurrent.{ExecutionContext, Future}
@@ -29,19 +29,14 @@ import org.apache.spark.storage.{BlockId, RDDBlockId}
 import org.apache.spark.storage.BlockManagerMessages.{GetCachedBlocks, ReplicateOneBlock}
 import org.apache.spark.util.ThreadUtils
 
-// TODO bk check for tasks?
-// TODO bk make force kill timeout configurable
 final private[spark] case class GracefulShutdown(
     endpoint: RpcEndpointRef,
     conf: SparkConf)
   extends Logging {
 
-  private val forceKillAfterS =
-    conf.getTimeAsSeconds("spark.dynamicAllocation.recoverCachedData", "120s")
   private val asyncThreadPool =
     ThreadUtils.newDaemonCachedThreadPool("graceful-shutdown-thread-pool")
   private implicit val asyncExecutionContext = ExecutionContext.fromExecutorService(asyncThreadPool)
-  private val killScheduler = Executors.newSingleThreadScheduledExecutor
 
   def shutdown(executorIds: Seq[String]): Unit = {
     logDebug(s"shutdown $executorIds")
@@ -67,9 +62,6 @@ final private[spark] case class GracefulShutdown(
         endpoint.send(KillExecutor(executorId))
     }
 
-  private case class ForceKill(executorIds: Seq[String]) extends Runnable {
-    def run(): Unit = executorIds.foreach(id => endpoint.send(KillExecutor(id)))
-  }
 }
 
 object GracefulShutdown {
@@ -77,16 +69,22 @@ object GracefulShutdown {
 
   def apply(rpcEnv: RpcEnv, eam: ExecutorAllocationManager, conf: SparkConf): GracefulShutdown = {
     val endpoint = rpcEnv.setupEndpoint(endpointName, GracefulShutdownEndpoint(rpcEnv,
-      SparkEnv.get.blockManager.master.driverEndpoint, eam))
+      SparkEnv.get.blockManager.master.driverEndpoint, eam, conf))
     GracefulShutdown(endpoint, conf)
   }
 }
 
-private final case class GracefulShutdownEndpoint(
+private case class GracefulShutdownEndpoint(
    rpcEnv: RpcEnv,
    blockManagerMasterEndpoint: RpcEndpointRef,
-   executorAllocationManager: ExecutorAllocationManager
+   executorAllocationManager: ExecutorAllocationManager,
+   conf: SparkConf
  ) extends ThreadSafeRpcEndpoint with Logging {
+
+  private val forceKillAfterS =
+    conf.getTimeAsSeconds("spark.dynamicAllocation.recoverCachedData", "120s")
+  val killScheduler = Executors.newSingleThreadScheduledExecutor
+  val dataForExecutor = mutable.Map.empty[String, GracefulShutdownData]
 
   private val blocksToSave: mutable.Map[String, mutable.PriorityQueue[RDDBlockId]] =
     mutable.HashMap.empty
@@ -106,6 +104,26 @@ private final case class GracefulShutdownEndpoint(
   private def getBlocks(executorIds: Seq[String]): Map[String, EmptyState] = {
     logDebug(s"getting all RDD blocks for $executorIds")
     executorIds.map { executorId =>
+      val blocks = blockManagerMasterEndpoint
+        .askSync[collection.Set[BlockId]](GetCachedBlocks(executorId))
+
+      dataForExecutor.get(executorId) match {
+        case Some(data) =>
+          data.update(blocks)
+          (executorId, if (data.blocksToSave.isEmpty) Empty else NotEmpty)
+        case None =>
+          val killTimer =
+            killScheduler.schedule(ForceKill(executorIds, self), forceKillAfterS, TimeUnit.SECONDS)
+          val data = GracefulShutdownData(blocks, killTimer)
+          dataForExecutor += executorId -> data
+          (executorId, if (data.blocksToSave.isEmpty) Empty else NotEmpty)
+      }
+    }(collection.breakOut)
+  }
+
+  private def getBlocksOld(executorIds: Seq[String]): Map[String, EmptyState] = {
+    logDebug(s"getting all RDD blocks for $executorIds")
+    executorIds.map { executorId =>
       val blocks: mutable.Set[RDDBlockId] = blockManagerMasterEndpoint
         .askSync[collection.Set[BlockId]](GetCachedBlocks(executorId))
         .flatMap(_.asRDDId)(collection.breakOut)
@@ -121,6 +139,17 @@ private final case class GracefulShutdownEndpoint(
 
   private def saveFirstBlock(executorId: String): Future[Boolean] = {
     logDebug(s"saveFirstBlock $executorId")
+    dataForExecutor.get(executorId) match {
+      case Some(data) if data.blocksToSave.nonEmpty =>
+        val blockId = data.takeBlock()
+        val message = ReplicateOneBlock(executorId, blockId, blocksToSave.keys.toSeq)
+        blockManagerMasterEndpoint.askSync[Future[Boolean]](message)
+      case _ => Future.successful(false)
+    }
+  }
+
+  private def saveFirstBlockOld(executorId: String): Future[Boolean] = {
+    logDebug(s"saveFirstBlock $executorId")
     blocksToSave.get(executorId) match {
       case Some(p) if p.nonEmpty =>
         val blockId = p.dequeue()
@@ -131,11 +160,48 @@ private final case class GracefulShutdownEndpoint(
     }
   }
 
-  private def killExecutor(executorId: String): Unit = {
+  private def killExecutor(executorId: String): Unit = dataForExecutor.get(executorId) match {
+    case Some(data) =>
+      logDebug(s"Requesting to kill $executorId")
+      data.shutdownTimer.cancel(false)
+      dataForExecutor -= executorId
+      executorAllocationManager.killExecutors(Seq(executorId))
+    case None =>
+      logWarning(s"Trying to kill executor ($executorId) we don't have data for. Was probably " +
+        s"already killed.")
+  }
+
+  private def killExecutorOld(executorId: String): Unit = {
     logDebug(s"done replicating blocks for $executorId")
     blocksToSave -= executorId
     savedBlocks -= executorId
     executorAllocationManager.killExecutors(Seq(executorId))
+  }
+}
+
+class GracefulShutdownData(
+    val blocksToSave: mutable.PriorityQueue[RDDBlockId],
+    val savedBlocks: mutable.HashSet[RDDBlockId],
+    val shutdownTimer: ScheduledFuture[_]) {
+
+  def update(blocks: collection.Set[BlockId]): Unit = {
+    val newBlocks = (blocks -- savedBlocks).flatMap(_.asRDDId)
+    blocksToSave ++= newBlocks
+  }
+
+  def takeBlock(): RDDBlockId = {
+    val block = blocksToSave.dequeue()
+    savedBlocks += block
+    block
+  }
+}
+
+object GracefulShutdownData {
+  def apply(blocks: collection.Set[BlockId], timer: ScheduledFuture[_]): GracefulShutdownData = {
+    val rddblocks = blocks.flatMap(_.asRDDId)
+    val pq = mutable.PriorityQueue.empty[RDDBlockId](Ordering.by(_.rddId))
+    pq ++= rddblocks
+    new GracefulShutdownData(pq, mutable.HashSet.empty[RDDBlockId], timer)
   }
 }
 
@@ -147,5 +213,9 @@ private final case class KillExecutor(executorId: String) extends GracefulShutdo
 private trait EmptyState
 private case object Empty extends EmptyState
 private case object NotEmpty extends EmptyState
+
+private case class ForceKill(executorIds: Seq[String], endpoint: RpcEndpointRef) extends Runnable {
+  def run(): Unit = executorIds.foreach(id => endpoint.send(KillExecutor(id)))
+}
 
 

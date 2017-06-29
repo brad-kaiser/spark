@@ -61,7 +61,7 @@ class GracefulShutdownSuite extends SparkFunSuite with MockitoSugar with Matcher
 
     gracefulShutdown.shutdown(Seq("1"))
     Thread.sleep(1100)
-    verify(eam).killExecutors(Seq("1"))
+    verify(eam, times(1)).killExecutors(Seq("1"))
     // We should do three full cycles before the timer forces executor kill. One more cycle will
     // complete before graceful shutdown is complete
     bmme.replicated.size shouldBe 3 + 1
