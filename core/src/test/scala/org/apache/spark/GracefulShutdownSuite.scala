@@ -37,9 +37,8 @@ class GracefulShutdownSuite extends SparkFunSuite with MockitoSugar with Matcher
     val eam = mock[ExecutorAllocationManager]
     val blocks = Set(RDDBlockId(1, 1), RDDBlockId(2, 1))
     val bmme = ListOfBlocksBMM(blocks.iterator)
-    val bmmeRef = DummyRef(bmme, conf)
-    val gse = GracefulShutdownEndpoint(null, bmmeRef, eam)
-    val gseRef = DummyRef(gse, conf)
+    val bmmeRef = DummyRef(bmme)
+    val gseRef = DummyRef(new GracefulShutdownEndpoint(null, bmmeRef, eam, conf))
     val gracefulShutdown = new GracefulShutdown(gseRef, conf)
 
     when(eam.killExecutors(Seq("1"))).thenReturn(Seq("1"))
@@ -50,23 +49,23 @@ class GracefulShutdownSuite extends SparkFunSuite with MockitoSugar with Matcher
     bmme.replicated.toSet shouldBe blocks
   }
 
+
   test("GracefulShutdown will kill executor if it takes too long to replicate") {
-    val conf = new SparkConf().set("spark.dynamicAllocation.recoverCachedData", "1s")
+    val conf = new SparkConf().set("spark.dynamicAllocation.recoverCachedData.timeout", "1s")
     val eam = mock[ExecutorAllocationManager]
     val bmme = ListOfBlocksBMM(SlowInfiniteIterator(300))
-    val bmmeRef = DummyRef(bmme, conf)
-    val gse = GracefulShutdownEndpoint(null, bmmeRef, eam)
-    val gseRef = DummyRef(gse, conf)
+    val bmmeRef = DummyRef(bmme)
+    val gse = new GracefulShutdownEndpoint(null, bmmeRef, eam, conf)
+    val gseRef = DummyRef(gse)
     val gracefulShutdown = new GracefulShutdown(gseRef, conf)
 
     gracefulShutdown.shutdown(Seq("1"))
-    Thread.sleep(1100)
+    Thread.sleep(2100)
     verify(eam, times(1)).killExecutors(Seq("1"))
     // We should do three full cycles before the timer forces executor kill. One more cycle will
     // complete before graceful shutdown is complete
     bmme.replicated.size shouldBe 3 + 1
   }
-
 }
 
 private case class SlowInfiniteIterator(waitMs: Int) extends Iterator[BlockId] {
@@ -78,6 +77,7 @@ private case class SlowInfiniteIterator(waitMs: Int) extends Iterator[BlockId] {
   }
 }
 
+// fake BlockManagerMasterEndpoint
 private case class ListOfBlocksBMM(blocks: Iterator[BlockId]) extends ThreadSafeRpcEndpoint {
   val rpcEnv = null
   val replicated = mutable.Set.empty[BlockId]
@@ -93,19 +93,23 @@ private case class ListOfBlocksBMM(blocks: Iterator[BlockId]) extends ThreadSafe
   }
 }
 
-private case class DummyRef( endpoint: RpcEndpoint, conf: SparkConf) extends RpcEndpointRef(conf) {
+// Turns an RpcEndpoint into RpcEndpointRef by calling receive and reply directly
+private case class DummyRef(endpoint: RpcEndpoint) extends RpcEndpointRef(new SparkConf()) {
   def address: RpcAddress = null
   def name: String = null
 
   def send(message: Any): Unit = endpoint.receive(message)
 
   def ask[T: ClassTag](message: Any, timeout: RpcTimeout): Future[T] = {
+    println(message)
     val context = new DummyRpcCallContext[T]
     endpoint.receiveAndReply(context)(message)
     Future.successful(context.result)
   }
+
 }
 
+// saves values you put in context.reply
 private class DummyRpcCallContext[T] extends RpcCallContext {
   var result: T = _
   def reply(response: Any): Unit = result = response.asInstanceOf[T]

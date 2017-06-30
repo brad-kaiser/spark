@@ -445,6 +445,7 @@ private[spark] class ExecutorAllocationManager(
     }
   }
 
+  // todo bk does this block? YES!!
   def killExecutors(executorIds: Seq[String]): Seq[String] = {
     logDebug(s"Starting kill process for $executorIds")
     val result = client.killExecutors(executorIds)
