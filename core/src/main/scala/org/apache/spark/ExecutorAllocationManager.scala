@@ -241,7 +241,7 @@ private[spark] class ExecutorAllocationManager(
 
     client.requestTotalExecutors(numExecutorsTarget, localityAwareTasks, hostToLocalTaskCount)
 
-    gracefulShutdowner = GracefulShutdown(SparkEnv.get.rpcEnv, this, conf)
+    gracefulShutdowner = GracefulShutdown(this, conf)
   }
 
   /**

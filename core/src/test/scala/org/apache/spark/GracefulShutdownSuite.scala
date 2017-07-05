@@ -17,9 +17,8 @@
 
 package org.apache.spark
 
-import java.util.concurrent.atomic.AtomicInteger
-
 import scala.collection.mutable
+import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.Future
 import scala.reflect.ClassTag
 
@@ -36,10 +35,10 @@ class GracefulShutdownSuite extends SparkFunSuite with MockitoSugar with Matcher
     val conf = new SparkConf()
     val eam = mock[ExecutorAllocationManager]
     val blocks = Set(RDDBlockId(1, 1), RDDBlockId(2, 1))
-    val bmme = ListOfBlocksBMM(blocks.iterator)
+    val bmme = FakeBMM(1, blocks.iterator)
     val bmmeRef = DummyRef(bmme)
-    val gseRef = DummyRef(new GracefulShutdownEndpoint(null, bmmeRef, eam, conf))
-    val gracefulShutdown = new GracefulShutdown(gseRef, conf)
+    val gss = new GracefulShutdownState(bmmeRef, eam, conf)
+    val gracefulShutdown = new GracefulShutdown(gss, conf)
 
     when(eam.killExecutors(Seq("1"))).thenReturn(Seq("1"))
 
@@ -53,32 +52,23 @@ class GracefulShutdownSuite extends SparkFunSuite with MockitoSugar with Matcher
   test("GracefulShutdown will kill executor if it takes too long to replicate") {
     val conf = new SparkConf().set("spark.dynamicAllocation.recoverCachedData.timeout", "1s")
     val eam = mock[ExecutorAllocationManager]
-    val bmme = ListOfBlocksBMM(SlowInfiniteIterator(300))
+    val blocks = Set(RDDBlockId(1, 1), RDDBlockId(2, 1), RDDBlockId(3, 1), RDDBlockId(4, 1))
+    val bmme = FakeBMM(600, blocks.iterator)
     val bmmeRef = DummyRef(bmme)
-    val gse = new GracefulShutdownEndpoint(null, bmmeRef, eam, conf)
-    val gseRef = DummyRef(gse)
-    val gracefulShutdown = new GracefulShutdown(gseRef, conf)
+    val gss = new GracefulShutdownState(bmmeRef, eam, conf)
+    val gracefulShutdown = new GracefulShutdown(gss, conf)
 
     gracefulShutdown.shutdown(Seq("1"))
-    Thread.sleep(2100)
+    Thread.sleep(1010)
     verify(eam, times(1)).killExecutors(Seq("1"))
-    // We should do three full cycles before the timer forces executor kill. One more cycle will
-    // complete before graceful shutdown is complete
-    bmme.replicated.size shouldBe 3 + 1
-  }
-}
-
-private case class SlowInfiniteIterator(waitMs: Int) extends Iterator[BlockId] {
-  val count = new AtomicInteger(0)
-  def hasNext: Boolean = true
-  def next: BlockId = {
-    Thread.sleep(waitMs)
-    RDDBlockId(count.getAndIncrement(), 1)
+    bmme.replicated.size shouldBe 2
   }
 }
 
 // fake BlockManagerMasterEndpoint
-private case class ListOfBlocksBMM(blocks: Iterator[BlockId]) extends ThreadSafeRpcEndpoint {
+private case class FakeBMM(pauseMillis: Int, blocks: Iterator[BlockId])
+  extends ThreadSafeRpcEndpoint {
+
   val rpcEnv = null
   val replicated = mutable.Set.empty[BlockId]
 
@@ -89,7 +79,11 @@ private case class ListOfBlocksBMM(blocks: Iterator[BlockId]) extends ThreadSafe
       context.reply(result)
     case ReplicateOneBlock(executorId, blockId, _) =>
       replicated += blockId
-      context.reply(Future.successful(true))
+      val future = Future {
+        Thread.sleep(pauseMillis)
+        true
+      }
+      context.reply(future)
   }
 }
 
@@ -101,12 +95,10 @@ private case class DummyRef(endpoint: RpcEndpoint) extends RpcEndpointRef(new Sp
   def send(message: Any): Unit = endpoint.receive(message)
 
   def ask[T: ClassTag](message: Any, timeout: RpcTimeout): Future[T] = {
-    println(message)
     val context = new DummyRpcCallContext[T]
     endpoint.receiveAndReply(context)(message)
     Future.successful(context.result)
   }
-
 }
 
 // saves values you put in context.reply
@@ -116,3 +108,4 @@ private class DummyRpcCallContext[T] extends RpcCallContext {
   def sendFailure(e: Throwable): Unit = ()
   def senderAddress: RpcAddress = null
 }
+

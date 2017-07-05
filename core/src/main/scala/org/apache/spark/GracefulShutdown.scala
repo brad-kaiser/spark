@@ -24,7 +24,7 @@ import scala.concurrent.{ExecutionContext, Future}
 import scala.util.Failure
 
 import org.apache.spark.internal.Logging
-import org.apache.spark.rpc.{RpcCallContext, RpcEndpointRef, RpcEnv, ThreadSafeRpcEndpoint}
+import org.apache.spark.rpc.RpcEndpointRef
 import org.apache.spark.storage.{BlockId, RDDBlockId}
 import org.apache.spark.storage.BlockManagerMessages.{GetCachedBlocks, ReplicateOneBlock}
 import org.apache.spark.util.ThreadUtils
@@ -33,8 +33,8 @@ import org.apache.spark.util.ThreadUtils
  * Responsible for asynchronously replicating all of an executors cached blocks, and then shutting
  * it down.
  */
-final private[spark] case class GracefulShutdown(
-    endpoint: RpcEndpointRef,
+final private class GracefulShutdown(
+    gss: GracefulShutdownState,
     conf: SparkConf)
   extends Logging {
 
@@ -56,8 +56,8 @@ final private[spark] case class GracefulShutdown(
    * @param executorIds
    */
   private def checkBlocks(executorIds: Seq[String]): Unit =
-    endpoint.askSync[Map[String, Emptiness]](GetBlocks(executorIds)).foreach {
-      case (executorId, Empty) => endpoint.send(KillExecutor(executorId))
+    gss.getBlocks(executorIds).foreach {
+      case (executorId, Empty) => gss.killExecutor(executorId)
       case (executorId, NotEmpty) => saveBlocks(executorId)
     }
 
@@ -67,33 +67,30 @@ final private[spark] case class GracefulShutdown(
    * @param executorId
    */
   private def saveBlocks(executorId: String): Unit =
-    endpoint.askSync[Future[Boolean]](SaveFirstBlock(executorId))
+    gss.saveFirstBlock(executorId)
     .onComplete {
       case scala.util.Success(true) => saveBlocks(executorId)
       case scala.util.Success(false) => checkBlocks(Seq(executorId))
       case Failure(f) =>
         logWarning("Error trying to replicate blocks", f)
-        endpoint.send(KillExecutor(executorId))
+        gss.killExecutor(executorId)
     }
 }
 
-object GracefulShutdown {
-  val endpointName = "graceful-shutdown"
-
-  def apply(rpcEnv: RpcEnv, eam: ExecutorAllocationManager, conf: SparkConf): GracefulShutdown = {
-    val endpoint = rpcEnv.setupEndpoint(endpointName, new GracefulShutdownEndpoint(rpcEnv,
-      SparkEnv.get.blockManager.master.driverEndpoint, eam, conf))
-    GracefulShutdown(endpoint, conf)
+private object GracefulShutdown {
+  def apply(eam: ExecutorAllocationManager, conf: SparkConf): GracefulShutdown = {
+    val gse = new GracefulShutdownState(
+      SparkEnv.get.blockManager.master.driverEndpoint, eam, conf)
+    new GracefulShutdown(gse, conf)
   }
 }
 
 // Thread safe endpoint to handle executor state during graceful shutdown
-private class GracefulShutdownEndpoint(
-   val rpcEnv: RpcEnv,
+private class GracefulShutdownState(
    blockManagerMasterEndpoint: RpcEndpointRef,
    executorAllocationManager: ExecutorAllocationManager,
    conf: SparkConf
- ) extends ThreadSafeRpcEndpoint with Logging {
+ ) extends Logging {
 
   type ExecMap[T] = mutable.Map[String, T]
 
@@ -104,17 +101,8 @@ private class GracefulShutdownEndpoint(
   private val savedBlocks: ExecMap[mutable.HashSet[RDDBlockId]] = new mutable.HashMap
   private val killTimers: ExecMap[ScheduledFuture[_]] = new mutable.HashMap
 
-  override def receive: PartialFunction[Any, Unit] = {
-    case KillExecutor(executorId) => killExecutor(executorId)
-  }
-
-  override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
-    case SaveFirstBlock(executorId) => context.reply(saveFirstBlock(executorId))
-    case GetBlocks(executorIds) => context.reply(getBlocks(executorIds))
-  }
-
   // get blocks from block manager master
-  private def getBlocks(executorIds: Seq[String]): Map[String, Emptiness] = {
+  def getBlocks(executorIds: Seq[String]): Map[String, Emptiness] = synchronized {
     logDebug(s"getting all RDD blocks for $executorIds")
     executorIds.map { executorId =>
       val blocks: mutable.Set[RDDBlockId] = blockManagerMasterEndpoint
@@ -127,7 +115,7 @@ private class GracefulShutdownEndpoint(
       blocksToSave(executorId) = queue
 
       if (!killTimers.contains(executorId)) {
-        val killRunnable = new Runnable { def run(): Unit = self.send(KillExecutor(executorId)) }
+        val killRunnable = new Runnable { def run(): Unit = killExecutor(executorId) }
         val killTimer = killScheduler.schedule(killRunnable, forceKillAfterS, TimeUnit.SECONDS)
         killTimers(executorId) = killTimer
       }
@@ -137,15 +125,16 @@ private class GracefulShutdownEndpoint(
   }
 
   // Ask block manager master to replicate a cached block
-  private def saveFirstBlock(executorId: String): Future[Boolean] = {
+  def saveFirstBlock(executorId: String): Future[Boolean] = synchronized {
     logDebug(s"saveFirstBlock $executorId")
     blocksToSave.get(executorId) match {
       case Some(p) if p.nonEmpty =>
         val blockId = p.dequeue()
+        logDebug(s"saving $blockId")
         val savedBlocksForExecutor = savedBlocks.getOrElseUpdate(executorId, new mutable.HashSet)
         savedBlocksForExecutor += blockId
-        blockManagerMasterEndpoint.askSync[Future[Boolean]](
-          ReplicateOneBlock(executorId, blockId, blocksToSave.keys.toSeq))
+        val replicateMessage = ReplicateOneBlock(executorId, blockId, blocksToSave.keys.toSeq)
+        blockManagerMasterEndpoint.askSync[Future[Boolean]](replicateMessage)
       case _ => Future.successful(false)
     }
   }
@@ -153,7 +142,7 @@ private class GracefulShutdownEndpoint(
   // Ask ExecutorAllocationManager to kill executor and clean up state
   // executorAllocationManager.killExecutors blocks. This might be a problem
   // TODO bk make a non blocking version of kill executors
-  private def killExecutor(executorId: String): Unit = {
+  def killExecutor(executorId: String): Unit = synchronized {
     logDebug(s"Sending request to kill $executorId")
     killTimers.get(executorId).foreach(_.cancel(false))
     killTimers -= executorId
@@ -163,11 +152,6 @@ private class GracefulShutdownEndpoint(
     executorAllocationManager.killExecutors(Seq(executorId))
   }
 }
-
-private sealed trait GracefulShutdownMessage
-private final case class GetBlocks(executorIds: Seq[String]) extends GracefulShutdownMessage
-private final case class SaveFirstBlock(executorId: String) extends GracefulShutdownMessage
-private final case class KillExecutor(executorId: String) extends GracefulShutdownMessage
 
 private sealed trait Emptiness
 private case object Empty extends Emptiness
