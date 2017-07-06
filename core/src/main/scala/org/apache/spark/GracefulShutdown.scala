@@ -43,7 +43,7 @@ final private class GracefulShutdown(
 
   /**
    * Start the graceful shutdown process for these executors
-   * @param executorIds
+   * @param executorIds the executors to start shutting down
    */
   def shutdown(executorIds: Seq[String]): Unit = {
     logDebug(s"shutdown $executorIds")
@@ -53,23 +53,23 @@ final private class GracefulShutdown(
   /**
    * Get list of cached blocks from BlockManagerMaster. If some remain, save them, otherwise kill
    * the executors
-   * @param executorIds
+   * @param executorIds the executors to check
    */
   private def checkBlocks(executorIds: Seq[String]): Unit =
     gss.getBlocks(executorIds).foreach {
       case (executorId, Empty) => gss.killExecutor(executorId)
-      case (executorId, NotEmpty) => saveBlocks(executorId)
+      case (executorId, NotEmpty) => saveABlock(executorId)
     }
 
   /**
    * Replicate one cached block on an executor. If there are more, repeat. If there are none, check
    * with the block manager master again. If there is an error, go ahead and kill executor.
-   * @param executorId
+   * @param executorId the executor to save a block one
    */
-  private def saveBlocks(executorId: String): Unit =
+  private def saveABlock(executorId: String): Unit =
     gss.saveFirstBlock(executorId)
     .onComplete {
-      case scala.util.Success(true) => saveBlocks(executorId)
+      case scala.util.Success(true) => saveABlock(executorId)
       case scala.util.Success(false) => checkBlocks(Seq(executorId))
       case Failure(f) =>
         logWarning("Error trying to replicate blocks", f)

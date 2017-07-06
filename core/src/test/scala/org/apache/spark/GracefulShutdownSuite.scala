@@ -17,7 +17,9 @@
 
 package org.apache.spark
 
-import scala.collection.mutable
+import java.util.concurrent.ConcurrentLinkedQueue
+
+import scala.collection.JavaConverters._
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.Future
 import scala.reflect.ClassTag
@@ -34,7 +36,7 @@ class GracefulShutdownSuite extends SparkFunSuite with MockitoSugar with Matcher
   test("GracefulShutdown will take blocks until empty and then kill executor") {
     val conf = new SparkConf()
     val eam = mock[ExecutorAllocationManager]
-    val blocks = Set(RDDBlockId(1, 1), RDDBlockId(2, 1))
+    val blocks = Seq(RDDBlockId(1, 1), RDDBlockId(2, 1))
     val bmme = FakeBMM(1, blocks.iterator)
     val bmmeRef = DummyRef(bmme)
     val gss = new GracefulShutdownState(bmmeRef, eam, conf)
@@ -45,9 +47,8 @@ class GracefulShutdownSuite extends SparkFunSuite with MockitoSugar with Matcher
     gracefulShutdown.shutdown(Seq("1"))
     Thread.sleep(1000)
     verify(eam).killExecutors(Seq("1"))
-    bmme.replicated.toSet shouldBe blocks
+    bmme.replicated.asScala.toSeq shouldBe blocks
   }
-
 
   test("GracefulShutdown will kill executor if it takes too long to replicate") {
     val conf = new SparkConf().set("spark.dynamicAllocation.recoverCachedData.timeout", "1s")
@@ -61,16 +62,45 @@ class GracefulShutdownSuite extends SparkFunSuite with MockitoSugar with Matcher
     gracefulShutdown.shutdown(Seq("1"))
     Thread.sleep(1010)
     verify(eam, times(1)).killExecutors(Seq("1"))
-    bmme.replicated.size shouldBe 2
+    bmme.replicated.size shouldBe 1
   }
+
+  test("shutdown timer will get cancelled if replication finishes") {
+    val conf = new SparkConf().set("spark.dynamicAllocation.recoverCachedData.timeout", "1s")
+    val eam = mock[ExecutorAllocationManager]
+    val blocks = Set(RDDBlockId(1, 1))
+    val bmme = FakeBMM(1, blocks.iterator)
+    val bmmeRef = DummyRef(bmme)
+    val gss = new GracefulShutdownState(bmmeRef, eam, conf)
+    val gracefulShutdown = new GracefulShutdown(gss, conf)
+
+    gracefulShutdown.shutdown(Seq("1"))
+    Thread.sleep(1100)
+    verify(eam, times(1)).killExecutors(Seq("1")) // should be killed once not twice
+  }
+
+  test("Blocks don't get replicated more than once") {
+    val conf = new SparkConf()
+    val eam = mock[ExecutorAllocationManager]
+    val blocks = Seq(RDDBlockId(1, 1), RDDBlockId(1, 1), RDDBlockId(1, 1))
+    val bmme = FakeBMM(1, blocks.iterator)
+    val bmmeRef = DummyRef(bmme)
+    val gss = new GracefulShutdownState(bmmeRef, eam, conf)
+    val gracefulShutdown = new GracefulShutdown(gss, conf)
+
+    gracefulShutdown.shutdown(Seq("1"))
+    Thread.sleep(100)
+    bmme.replicated.size shouldBe 1
+    bmme.replicated.asScala.toSeq shouldBe Seq(RDDBlockId(1, 1))
+  }
+
+
 }
 
-// fake BlockManagerMasterEndpoint
 private case class FakeBMM(pauseMillis: Int, blocks: Iterator[BlockId])
   extends ThreadSafeRpcEndpoint {
-
   val rpcEnv = null
-  val replicated = mutable.Set.empty[BlockId]
+  val replicated = new ConcurrentLinkedQueue[BlockId]()
 
   override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
     case GetCachedBlocks(_) =>
@@ -78,9 +108,9 @@ private case class FakeBMM(pauseMillis: Int, blocks: Iterator[BlockId])
         if (blocks.hasNext) Set(blocks.next) else Set.empty[BlockId]
       context.reply(result)
     case ReplicateOneBlock(executorId, blockId, _) =>
-      replicated += blockId
       val future = Future {
         Thread.sleep(pauseMillis)
+        replicated.add(blockId)
         true
       }
       context.reply(future)
@@ -91,9 +121,7 @@ private case class FakeBMM(pauseMillis: Int, blocks: Iterator[BlockId])
 private case class DummyRef(endpoint: RpcEndpoint) extends RpcEndpointRef(new SparkConf()) {
   def address: RpcAddress = null
   def name: String = null
-
   def send(message: Any): Unit = endpoint.receive(message)
-
   def ask[T: ClassTag](message: Any, timeout: RpcTimeout): Future[T] = {
     val context = new DummyRpcCallContext[T]
     endpoint.receiveAndReply(context)(message)
