@@ -44,7 +44,7 @@ class GracefulShutdownSuite extends SparkFunSuite with MockitoSugar with Matcher
 
     when(eam.killExecutors(Seq("1"))).thenReturn(Seq("1"))
 
-    gracefulShutdown.shutdown(Seq("1"))
+    gracefulShutdown.startExecutorKill(Seq("1"))
     Thread.sleep(1000)
     verify(eam).killExecutors(Seq("1"))
     bmme.replicated.asScala.toSeq shouldBe blocks
@@ -59,7 +59,7 @@ class GracefulShutdownSuite extends SparkFunSuite with MockitoSugar with Matcher
     val gss = new GracefulShutdownState(bmmeRef, eam, conf)
     val gracefulShutdown = new GracefulShutdown(gss, conf)
 
-    gracefulShutdown.shutdown(Seq("1"))
+    gracefulShutdown.startExecutorKill(Seq("1"))
     Thread.sleep(1010)
     verify(eam, times(1)).killExecutors(Seq("1"))
     bmme.replicated.size shouldBe 1
@@ -74,7 +74,7 @@ class GracefulShutdownSuite extends SparkFunSuite with MockitoSugar with Matcher
     val gss = new GracefulShutdownState(bmmeRef, eam, conf)
     val gracefulShutdown = new GracefulShutdown(gss, conf)
 
-    gracefulShutdown.shutdown(Seq("1"))
+    gracefulShutdown.startExecutorKill(Seq("1"))
     Thread.sleep(1100)
     verify(eam, times(1)).killExecutors(Seq("1")) // should be killed once not twice
   }
@@ -88,7 +88,7 @@ class GracefulShutdownSuite extends SparkFunSuite with MockitoSugar with Matcher
     val gss = new GracefulShutdownState(bmmeRef, eam, conf)
     val gracefulShutdown = new GracefulShutdown(gss, conf)
 
-    gracefulShutdown.shutdown(Seq("1"))
+    gracefulShutdown.startExecutorKill(Seq("1"))
     Thread.sleep(100)
     bmme.replicated.size shouldBe 1
     bmme.replicated.asScala.toSeq shouldBe Seq(RDDBlockId(1, 1))

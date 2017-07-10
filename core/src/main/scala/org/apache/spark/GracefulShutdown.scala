@@ -17,7 +17,7 @@
 
 package org.apache.spark
 
-import java.util.concurrent.{Executors, ScheduledFuture, TimeUnit}
+import java.util.concurrent.{ScheduledFuture, TimeUnit}
 
 import scala.collection.mutable
 import scala.concurrent.{ExecutionContext, Future}
@@ -45,9 +45,14 @@ final private class GracefulShutdown(
    * Start the graceful shutdown process for these executors
    * @param executorIds the executors to start shutting down
    */
-  def shutdown(executorIds: Seq[String]): Unit = {
+  def startExecutorKill(executorIds: Seq[String]): Unit = {
     logDebug(s"shutdown $executorIds")
     checkBlocks(executorIds)
+  }
+
+  def stop(): java.util.List[Runnable] = {
+    threadPool.shutdownNow()
+    gss.stop()
   }
 
   /**
@@ -96,7 +101,8 @@ private class GracefulShutdownState(
 
   private val forceKillAfterS =
     conf.getTimeAsSeconds("spark.dynamicAllocation.recoverCachedData.timeout", "120s")
-  private val killScheduler = Executors.newSingleThreadScheduledExecutor
+  private val killScheduler =
+    ThreadUtils.newDaemonSingleThreadScheduledExecutor("graceful-shutdown-timers")
   private val blocksToSave: ExecMap[mutable.PriorityQueue[RDDBlockId]] = new mutable.HashMap
   private val savedBlocks: ExecMap[mutable.HashSet[RDDBlockId]] = new mutable.HashMap
   private val killTimers: ExecMap[ScheduledFuture[_]] = new mutable.HashMap
@@ -151,6 +157,8 @@ private class GracefulShutdownState(
 
     executorAllocationManager.killExecutors(Seq(executorId))
   }
+
+  def stop(): java.util.List[Runnable] = killScheduler.shutdownNow()
 }
 
 private sealed trait Emptiness

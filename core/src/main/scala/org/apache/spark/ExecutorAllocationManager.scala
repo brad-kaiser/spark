@@ -88,7 +88,7 @@ private[spark] class ExecutorAllocationManager(
 
   import ExecutorAllocationManager._
 
-  var gracefulShutdowner: GracefulShutdown = _
+  var gracefulShutdown: GracefulShutdown = _
 
   // Lower and upper bounds on the number of executors.
   private val minNumExecutors = conf.get(DYN_ALLOCATION_MIN_EXECUTORS)
@@ -241,13 +241,15 @@ private[spark] class ExecutorAllocationManager(
 
     client.requestTotalExecutors(numExecutorsTarget, localityAwareTasks, hostToLocalTaskCount)
 
-    gracefulShutdowner = GracefulShutdown(this, conf)
+    gracefulShutdown = GracefulShutdown(this, conf)
   }
 
   /**
    * Stop the allocation manager.
    */
   def stop(): Unit = {
+
+    gracefulShutdown.stop()
     executor.shutdown()
     executor.awaitTermination(10, TimeUnit.SECONDS)
   }
@@ -438,7 +440,7 @@ private[spark] class ExecutorAllocationManager(
       logDebug(s"Starting replicate process for $executorIdsToBeRemoved")
       client.markForDeath(executorIdsToBeRemoved)
       recordExecutorKill(executorIdsToBeRemoved)
-      gracefulShutdowner.shutdown(executorIdsToBeRemoved)
+      gracefulShutdown.startExecutorKill(executorIdsToBeRemoved)
     } else {
       val killed = killExecutors(executorIdsToBeRemoved)
       recordExecutorKill(killed)
