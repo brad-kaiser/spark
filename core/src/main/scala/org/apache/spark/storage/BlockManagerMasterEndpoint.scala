@@ -99,6 +99,8 @@ class BlockManagerMasterEndpoint(
 
     case GetCachedBlocks(executorId) => context.reply(getCachedBlocks(executorId))
 
+    case GetSizeOfBlocks(blocks) => context.reply(getSizeOfBlocks(blocks))
+
     case GetBlockStatus(blockId, askSlaves) =>
       context.reply(blockStatus(blockId, askSlaves))
 
@@ -268,6 +270,18 @@ class BlockManagerMasterEndpoint(
     } yield info.cachedBlocks
 
     cachedBlocks.getOrElse(Set.empty)
+  }
+
+  private def getSizeOfBlocks(blocks: Seq[(String, BlockId)]): Long = {
+    val sizes: Seq[Long] = for {
+      (executorId, blockId) <- blocks
+      blockManagerId <- blockManagerIdByExecutor.get(executorId)
+      info <- blockManagerInfo.get(blockManagerId)
+      status <- Option(info.blocks.get(blockId))
+      size = status.memSize
+    } yield size
+
+    sizes.sum
   }
 
   /**

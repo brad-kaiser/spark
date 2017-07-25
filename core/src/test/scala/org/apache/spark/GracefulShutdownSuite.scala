@@ -29,15 +29,20 @@ import org.scalatest.Matchers
 import org.scalatest.mock.MockitoSugar
 
 import org.apache.spark.rpc._
-import org.apache.spark.storage.{BlockId, RDDBlockId}
-import org.apache.spark.storage.BlockManagerMessages.{GetCachedBlocks, ReplicateOneBlock}
+import org.apache.spark.storage.{BlockId, BlockManagerId, RDDBlockId}
+import org.apache.spark.storage.BlockManagerMessages.{GetCachedBlocks, GetMemoryStatus, GetSizeOfBlocks, ReplicateOneBlock}
 
 class GracefulShutdownSuite extends SparkFunSuite with MockitoSugar with Matchers {
+  val oneGB = 1024L * 1024L * 1024L * 1024L
+  val plentyOfMem = Map(BlockManagerId("1", "host", 12, None) -> (oneGB, oneGB),
+                        BlockManagerId("2", "host", 12, None) -> (oneGB, oneGB),
+                        BlockManagerId("3", "host", 12, None) -> (oneGB, oneGB))
+
   test("GracefulShutdown will take blocks until empty and then kill executor") {
     val conf = new SparkConf()
     val eam = mock[ExecutorAllocationManager]
     val blocks = Seq(RDDBlockId(1, 1), RDDBlockId(2, 1))
-    val bmme = FakeBMM(1, blocks.iterator)
+    val bmme = FakeBMM(1, blocks.iterator, plentyOfMem)
     val bmmeRef = DummyRef(bmme)
     val gss = new GracefulShutdownState(bmmeRef, eam, conf)
     val gracefulShutdown = new GracefulShutdown(gss, conf)
@@ -54,7 +59,7 @@ class GracefulShutdownSuite extends SparkFunSuite with MockitoSugar with Matcher
     val conf = new SparkConf().set("spark.dynamicAllocation.recoverCachedData.timeout", "1s")
     val eam = mock[ExecutorAllocationManager]
     val blocks = Set(RDDBlockId(1, 1), RDDBlockId(2, 1), RDDBlockId(3, 1), RDDBlockId(4, 1))
-    val bmme = FakeBMM(600, blocks.iterator)
+    val bmme = FakeBMM(600, blocks.iterator, plentyOfMem)
     val bmmeRef = DummyRef(bmme)
     val gss = new GracefulShutdownState(bmmeRef, eam, conf)
     val gracefulShutdown = new GracefulShutdown(gss, conf)
@@ -69,7 +74,7 @@ class GracefulShutdownSuite extends SparkFunSuite with MockitoSugar with Matcher
     val conf = new SparkConf().set("spark.dynamicAllocation.recoverCachedData.timeout", "1s")
     val eam = mock[ExecutorAllocationManager]
     val blocks = Set(RDDBlockId(1, 1))
-    val bmme = FakeBMM(1, blocks.iterator)
+    val bmme = FakeBMM(1, blocks.iterator, plentyOfMem)
     val bmmeRef = DummyRef(bmme)
     val gss = new GracefulShutdownState(bmmeRef, eam, conf)
     val gracefulShutdown = new GracefulShutdown(gss, conf)
@@ -83,7 +88,7 @@ class GracefulShutdownSuite extends SparkFunSuite with MockitoSugar with Matcher
     val conf = new SparkConf()
     val eam = mock[ExecutorAllocationManager]
     val blocks = Seq(RDDBlockId(1, 1), RDDBlockId(1, 1), RDDBlockId(1, 1))
-    val bmme = FakeBMM(1, blocks.iterator)
+    val bmme = FakeBMM(1, blocks.iterator, plentyOfMem)
     val bmmeRef = DummyRef(bmme)
     val gss = new GracefulShutdownState(bmmeRef, eam, conf)
     val gracefulShutdown = new GracefulShutdown(gss, conf)
@@ -94,11 +99,35 @@ class GracefulShutdownSuite extends SparkFunSuite with MockitoSugar with Matcher
     bmme.replicated.asScala.toSeq shouldBe Seq(RDDBlockId(1, 1))
   }
 
+  test("Blocks won't replicate if we are running out of space") {
+
+    val conf = new SparkConf()
+    val eam = mock[ExecutorAllocationManager]
+    val blocks = Seq(RDDBlockId(1, 1), RDDBlockId(1, 1), RDDBlockId(1, 1), RDDBlockId(1, 1))
+    val memStatus = Map(BlockManagerId("1", "host", 12, None) -> (2L, 1L),
+      BlockManagerId("2", "host", 12, None) -> (2L, 1L),
+      BlockManagerId("3", "host", 12, None) -> (2L, 1L),
+      BlockManagerId("4", "host", 12, None) -> (2L, 1L))
+    val bmme = FakeBMM(1, blocks.iterator, memStatus)
+    val bmmeRef = DummyRef(bmme)
+    val gss = new GracefulShutdownState(bmmeRef, eam, conf)
+    val gracefulShutdown = new GracefulShutdown(gss, conf)
+
+    gracefulShutdown.startExecutorKill(Seq("1", "2", "3", "4"))
+    Thread.sleep(100)
+    bmme.replicated.size shouldBe 2
+    bmme.replicated.asScala.toSeq shouldBe Seq(RDDBlockId(1, 1), RDDBlockId(1, 1))
+  }
 
 }
 
-private case class FakeBMM(pauseMillis: Int, blocks: Iterator[BlockId])
-  extends ThreadSafeRpcEndpoint {
+private case class FakeBMM(
+    pauseMillis: Int,
+    blocks: Iterator[BlockId],
+    memStatus: Map[BlockManagerId, (Long, Long)],
+    sizeOfBlock: Long = 1
+  ) extends ThreadSafeRpcEndpoint {
+
   val rpcEnv = null
   val replicated = new ConcurrentLinkedQueue[BlockId]()
 
@@ -114,6 +143,8 @@ private case class FakeBMM(pauseMillis: Int, blocks: Iterator[BlockId])
         true
       }
       context.reply(future)
+    case GetMemoryStatus => context.reply(memStatus)
+    case GetSizeOfBlocks(bs) => context.reply(bs.size * sizeOfBlock)
   }
 }
 
