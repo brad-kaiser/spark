@@ -40,7 +40,6 @@ class RecoverCachedDataSuite extends SparkFunSuite with Matchers with BeforeAndA
     .setMaster("local-cluster[4, 1, 512]")
     .set("spark.executor.memory", "512m")
     .set("spark.shuffle.service.enabled", "true")
-    .set("spark.shuffle.service.dont.start", "true")
     .set("spark.dynamicAllocation.enabled", "true")
     .set("spark.dynamicAllocation.recoverCachedData", "true")
     .set("spark.dynamicAllocation.cachedExecutorIdleTimeout", "1s")
