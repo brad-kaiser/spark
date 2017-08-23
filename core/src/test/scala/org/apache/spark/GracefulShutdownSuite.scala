@@ -34,9 +34,9 @@ import org.apache.spark.storage.BlockManagerMessages.{GetCachedBlocks, GetMemory
 
 class GracefulShutdownSuite extends SparkFunSuite with MockitoSugar with Matchers {
   val oneGB = 1024L * 1024L * 1024L * 1024L
-  val plentyOfMem = Map(BlockManagerId("1", "host", 12, None) -> (oneGB, oneGB),
-                        BlockManagerId("2", "host", 12, None) -> (oneGB, oneGB),
-                        BlockManagerId("3", "host", 12, None) -> (oneGB, oneGB))
+  val plentyOfMem = Map(BlockManagerId("1", "host", 12, None) -> ((oneGB, oneGB)),
+                        BlockManagerId("2", "host", 12, None) -> ((oneGB, oneGB)),
+                        BlockManagerId("3", "host", 12, None) -> ((oneGB, oneGB)))
 
   test("GracefulShutdown will take blocks until empty and then kill executor") {
     val conf = new SparkConf()
@@ -104,10 +104,10 @@ class GracefulShutdownSuite extends SparkFunSuite with MockitoSugar with Matcher
     val conf = new SparkConf()
     val eam = mock[ExecutorAllocationManager]
     val blocks = Seq(RDDBlockId(1, 1), RDDBlockId(1, 1), RDDBlockId(1, 1), RDDBlockId(1, 1))
-    val memStatus = Map(BlockManagerId("1", "host", 12, None) -> (2L, 1L),
-      BlockManagerId("2", "host", 12, None) -> (2L, 1L),
-      BlockManagerId("3", "host", 12, None) -> (2L, 1L),
-      BlockManagerId("4", "host", 12, None) -> (2L, 1L))
+    val memStatus = Map(BlockManagerId("1", "host", 12, None) -> ((2L, 1L)),
+      BlockManagerId("2", "host", 12, None) -> ((2L, 1L)),
+      BlockManagerId("3", "host", 12, None) -> ((2L, 1L)),
+      BlockManagerId("4", "host", 12, None) -> ((2L, 1L)))
     val bmme = FakeBMM(1, blocks.iterator, memStatus)
     val bmmeRef = DummyRef(bmme)
     val gss = new GracefulShutdownState(bmmeRef, eam, conf)

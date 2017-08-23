@@ -1106,7 +1106,7 @@ private object ExecutorAllocationManagerSuite extends PrivateMethodTester {
   }
 
   private def removeExecutor(manager: ExecutorAllocationManager, id: String): Boolean = {
-    manager invokePrivate _removeExecutor(id)
+    manager invokePrivate _removeExecutors(Seq(id))
   }
 
   private def removeExecutors(manager: ExecutorAllocationManager, ids: Seq[String]): Seq[String] = {
