@@ -22,7 +22,7 @@ import java.util.{HashMap => JHashMap}
 import scala.collection.JavaConverters._
 import scala.collection.mutable
 import scala.concurrent.{ExecutionContext, Future}
-import scala.util.{Failure, Random, Success}
+import scala.util.Random
 
 import org.apache.spark.SparkConf
 import org.apache.spark.annotation.DeveloperApi

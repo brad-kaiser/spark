@@ -32,7 +32,7 @@ import org.apache.spark.rpc._
 import org.apache.spark.storage.{BlockId, BlockManagerId, RDDBlockId}
 import org.apache.spark.storage.BlockManagerMessages.{GetCachedBlocks, GetMemoryStatus, GetSizeOfBlocks, ReplicateOneBlock}
 
-class GracefulShutdownSuite extends SparkFunSuite with MockitoSugar with Matchers {
+class RecoverCacheShutdownSuite extends SparkFunSuite with MockitoSugar with Matchers {
   val oneGB = 1024L * 1024L * 1024L * 1024L
   val plentyOfMem = Map(BlockManagerId("1", "host", 12, None) -> ((oneGB, oneGB)),
                         BlockManagerId("2", "host", 12, None) -> ((oneGB, oneGB)),
@@ -44,12 +44,12 @@ class GracefulShutdownSuite extends SparkFunSuite with MockitoSugar with Matcher
     val blocks = Seq(RDDBlockId(1, 1), RDDBlockId(2, 1))
     val bmme = FakeBMM(1, blocks.iterator, plentyOfMem)
     val bmmeRef = DummyRef(bmme)
-    val gss = new GracefulShutdownState(bmmeRef, eam, conf)
-    val gracefulShutdown = new GracefulShutdown(gss, conf)
+    val gss = new RecoverCacheShutdownState(bmmeRef, eam, conf)
+    val recover = new RecoverCacheShutdown(gss, conf)
 
     when(eam.killExecutors(Seq("1"))).thenReturn(Seq("1"))
 
-    gracefulShutdown.startExecutorKill(Seq("1"))
+    recover.startExecutorKill(Seq("1"))
     Thread.sleep(1000)
     verify(eam).killExecutors(Seq("1"))
     bmme.replicated.asScala.toSeq shouldBe blocks
@@ -61,10 +61,10 @@ class GracefulShutdownSuite extends SparkFunSuite with MockitoSugar with Matcher
     val blocks = Set(RDDBlockId(1, 1), RDDBlockId(2, 1), RDDBlockId(3, 1), RDDBlockId(4, 1))
     val bmme = FakeBMM(600, blocks.iterator, plentyOfMem)
     val bmmeRef = DummyRef(bmme)
-    val gss = new GracefulShutdownState(bmmeRef, eam, conf)
-    val gracefulShutdown = new GracefulShutdown(gss, conf)
+    val recoverState = new RecoverCacheShutdownState(bmmeRef, eam, conf)
+    val recover = new RecoverCacheShutdown(recoverState, conf)
 
-    gracefulShutdown.startExecutorKill(Seq("1"))
+    recover.startExecutorKill(Seq("1"))
     Thread.sleep(1010)
     verify(eam, times(1)).killExecutors(Seq("1"))
     bmme.replicated.size shouldBe 1
@@ -76,10 +76,10 @@ class GracefulShutdownSuite extends SparkFunSuite with MockitoSugar with Matcher
     val blocks = Set(RDDBlockId(1, 1))
     val bmme = FakeBMM(1, blocks.iterator, plentyOfMem)
     val bmmeRef = DummyRef(bmme)
-    val gss = new GracefulShutdownState(bmmeRef, eam, conf)
-    val gracefulShutdown = new GracefulShutdown(gss, conf)
+    val recoverState = new RecoverCacheShutdownState(bmmeRef, eam, conf)
+    val recover = new RecoverCacheShutdown(recoverState, conf)
 
-    gracefulShutdown.startExecutorKill(Seq("1"))
+    recover.startExecutorKill(Seq("1"))
     Thread.sleep(1100)
     verify(eam, times(1)).killExecutors(Seq("1")) // should be killed once not twice
   }
@@ -90,17 +90,16 @@ class GracefulShutdownSuite extends SparkFunSuite with MockitoSugar with Matcher
     val blocks = Seq(RDDBlockId(1, 1), RDDBlockId(1, 1), RDDBlockId(1, 1))
     val bmme = FakeBMM(1, blocks.iterator, plentyOfMem)
     val bmmeRef = DummyRef(bmme)
-    val gss = new GracefulShutdownState(bmmeRef, eam, conf)
-    val gracefulShutdown = new GracefulShutdown(gss, conf)
+    val recoverState = new RecoverCacheShutdownState(bmmeRef, eam, conf)
+    val recover = new RecoverCacheShutdown(recoverState, conf)
 
-    gracefulShutdown.startExecutorKill(Seq("1"))
+    recover.startExecutorKill(Seq("1"))
     Thread.sleep(100)
     bmme.replicated.size shouldBe 1
     bmme.replicated.asScala.toSeq shouldBe Seq(RDDBlockId(1, 1))
   }
 
   test("Blocks won't replicate if we are running out of space") {
-
     val conf = new SparkConf()
     val eam = mock[ExecutorAllocationManager]
     val blocks = Seq(RDDBlockId(1, 1), RDDBlockId(1, 1), RDDBlockId(1, 1), RDDBlockId(1, 1))
@@ -110,15 +109,14 @@ class GracefulShutdownSuite extends SparkFunSuite with MockitoSugar with Matcher
       BlockManagerId("4", "host", 12, None) -> ((2L, 1L)))
     val bmme = FakeBMM(1, blocks.iterator, memStatus)
     val bmmeRef = DummyRef(bmme)
-    val gss = new GracefulShutdownState(bmmeRef, eam, conf)
-    val gracefulShutdown = new GracefulShutdown(gss, conf)
+    val recoverState = new RecoverCacheShutdownState(bmmeRef, eam, conf)
+    val recover = new RecoverCacheShutdown(recoverState, conf)
 
-    gracefulShutdown.startExecutorKill(Seq("1", "2", "3", "4"))
+    recover.startExecutorKill(Seq("1", "2", "3", "4"))
     Thread.sleep(100)
     bmme.replicated.size shouldBe 2
     bmme.replicated.asScala.toSeq shouldBe Seq(RDDBlockId(1, 1), RDDBlockId(1, 1))
   }
-
 }
 
 private case class FakeBMM(
@@ -136,7 +134,7 @@ private case class FakeBMM(
       val result: collection.Set[BlockId] =
         if (blocks.hasNext) Set(blocks.next) else Set.empty[BlockId]
       context.reply(result)
-    case ReplicateOneBlock(executorId, blockId, _) =>
+    case ReplicateOneBlock(_, blockId, _) =>
       val future = Future {
         Thread.sleep(pauseMillis)
         replicated.add(blockId)

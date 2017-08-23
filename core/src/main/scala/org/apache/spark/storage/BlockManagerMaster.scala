@@ -242,6 +242,7 @@ class BlockManagerMaster(
       throw new SparkException("BlockManagerMasterEndpoint returned false, expected true.")
     }
   }
+
 }
 
 private[spark] object BlockManagerMaster {

@@ -533,7 +533,8 @@ class SparkContext(config: SparkConf) extends Logging {
     _executorAllocationManager =
       if (dynamicAllocationEnabled) {
         schedulerBackend match {
-          case b: ExecutorAllocationClient => Some(new ExecutorAllocationManager(
+          case b: ExecutorAllocationClient =>
+            Some(new ExecutorAllocationManager(
               schedulerBackend.asInstanceOf[ExecutorAllocationClient], listenerBus, _conf))
           case _ =>
             None

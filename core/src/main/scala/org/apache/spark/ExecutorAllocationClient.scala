@@ -17,8 +17,6 @@
 
 package org.apache.spark
 
-import scala.concurrent.Future
-
 /**
  * A client that communicates with the cluster manager to request or kill executors.
  * This is currently supported only in YARN mode.

@@ -33,16 +33,16 @@ import org.apache.spark.util.ThreadUtils
  * Responsible for asynchronously replicating all of an executors cached blocks, and then shutting
  * it down.
  */
-final private class GracefulShutdown(
-    gss: GracefulShutdownState,
+final private class RecoverCacheShutdown(
+    state: RecoverCacheShutdownState,
     conf: SparkConf)
   extends Logging {
 
-  private val threadPool = ThreadUtils.newDaemonCachedThreadPool("graceful-shutdown-thread-pool")
+  private val threadPool = ThreadUtils.newDaemonCachedThreadPool("recover-cache-shutdown-pool")
   private implicit val asyncExecutionContext = ExecutionContext.fromExecutorService(threadPool)
 
   /**
-   * Start the graceful shutdown process for these executors
+   * Start the recover cache shutdown process for these executors
    * @param execIds the executors to start shutting down
    */
   def startExecutorKill(execIds: Seq[String]): Unit = {
@@ -50,19 +50,23 @@ final private class GracefulShutdown(
     checkForReplicableBlocks(execIds)
   }
 
+  /**
+   * Stops all thread pools
+   * @return
+   */
   def stop(): java.util.List[Runnable] = {
     threadPool.shutdownNow()
-    gss.stop()
+    state.stop()
   }
 
   /**
-   * Get list of cached blocks from BlockManagerMaster. If some remain, save them, otherwise kill
-   * the executors
+   * Get list of cached blocks from BlockManagerMaster. If there are cached blocks, replicate them,
+   * otherwise kill the executors
    * @param execIds the executors to check
    */
-  private def checkForReplicableBlocks(execIds: Seq[String]) = gss.getBlocks(execIds).foreach {
-    case (executorId, NoMoreBlocks) => gss.killExecutor(executorId)
-    case (executorId, NotEnoughMemory) => gss.killExecutor(executorId)
+  private def checkForReplicableBlocks(execIds: Seq[String]) = state.getBlocks(execIds).foreach {
+    case (executorId, NoMoreBlocks) => state.killExecutor(executorId)
+    case (executorId, NotEnoughMemory) => state.killExecutor(executorId)
     case (executorId, HasCachedBlocks) => replicateBlocks(executorId)
   }
 
@@ -71,25 +75,30 @@ final private class GracefulShutdown(
    * with the block manager master again. If there is an error, go ahead and kill executor.
    * @param execId the executor to save a block one
    */
-  private def replicateBlocks(execId: String): Unit = gss.replicateFirstBlock(execId).onComplete {
+  private def replicateBlocks(execId: String): Unit = state.replicateFirstBlock(execId).onComplete {
     case scala.util.Success(true) => replicateBlocks(execId)
     case scala.util.Success(false) => checkForReplicableBlocks(Seq(execId))
     case Failure(f) =>
       logWarning("Error trying to replicate blocks", f)
-      gss.killExecutor(execId)
+      state.killExecutor(execId)
   }
 }
 
-private object GracefulShutdown {
-  def apply(eam: ExecutorAllocationManager, conf: SparkConf): GracefulShutdown = {
+private object RecoverCacheShutdown {
+  def apply(eam: ExecutorAllocationManager, conf: SparkConf): RecoverCacheShutdown = {
     val bmme = SparkEnv.get.blockManager.master.driverEndpoint
-    val gss = new GracefulShutdownState(bmme, eam, conf)
-    new GracefulShutdown(gss, conf)
+    val state = new RecoverCacheShutdownState(bmme, eam, conf)
+    new RecoverCacheShutdown(state, conf)
   }
 }
 
-// Thread safe endpoint to handle executor state during graceful shutdown
-private class GracefulShutdownState(
+/**
+ * Private class that holds state for all the executors being shutdown.
+ * @param blockManagerMasterEndpoint blockManagerMasterEndpoint
+ * @param executorAllocationManager ExecutorAllocationManager
+ * @param conf spark conf
+ */
+final private class RecoverCacheShutdownState(
    blockManagerMasterEndpoint: RpcEndpointRef,
    executorAllocationManager: ExecutorAllocationManager,
    conf: SparkConf
@@ -100,16 +109,27 @@ private class GracefulShutdownState(
   private val forceKillAfterS =
     conf.getTimeAsSeconds("spark.dynamicAllocation.recoverCachedData.timeout", "120s")
   private val scheduler =
-    ThreadUtils.newDaemonSingleThreadScheduledExecutor("graceful-shutdown-timers")
+    ThreadUtils.newDaemonSingleThreadScheduledExecutor("recover-cache-shutdown-timers")
 
   private val blocksToSave: ExecMap[mutable.PriorityQueue[RDDBlockId]] = new mutable.HashMap
   private val savedBlocks: ExecMap[mutable.HashSet[RDDBlockId]] = new mutable.HashMap
   private val killTimers: ExecMap[ScheduledFuture[_]] = new mutable.HashMap
 
-  // get blocks from block manager master
+  /**
+   * Query Block Manager Master for cached blocks.
+   * @param execIds the executors to query
+   * @return a map of executorId to its replication state.
+   */
   def getBlocks(execIds: Seq[String]): Map[String, ExecutorReplicationState] = synchronized {
     logDebug(s"getting all RDD blocks for $execIds")
-    execIds.map { id => if (isThereEnoughMemory(id)) updateBlockInfo(id) else id -> NotEnoughMemory
+    execIds.map { id =>
+      if (isThereEnoughMemory(id)) {
+        updateBlockState(id)
+        val blocksRemain = blocksToSave.get(id).exists(_.nonEmpty)
+        id -> (if (blocksRemain) HasCachedBlocks else NoMoreBlocks)
+      } else {
+        id -> NotEnoughMemory
+      }
     }(collection.breakOut)
   }
 
@@ -140,23 +160,29 @@ private class GracefulShutdownState(
     execMem.forall { case (_, (_, remaining)) => remaining - bytesPerExec >= 0 }
   }
 
-  private def blockList = for ((id, pq) <- blocksToSave.toSeq;  block <- pq) yield (id, block)
+  private def blockList = for {
+    (id, queue) <- blocksToSave.toSeq
+    block <- queue
+  } yield (id, block)
 
-  private def updateBlockInfo(execId: String): (String, ExecutorReplicationState) = {
+  private def updateBlockState(execId: String): Unit = {
     val blocks: mutable.Set[RDDBlockId] = blockManagerMasterEndpoint
       .askSync[collection.Set[BlockId]](GetCachedBlocks(execId))
       .flatMap(_.asRDDId)(collection.breakOut)
+
     blocks --= savedBlocks.getOrElse(execId, new mutable.HashSet)
-    val queue = mutable.PriorityQueue[RDDBlockId](blocks.toSeq: _*)(Ordering.by(_.rddId))
     blocksToSave(execId) = mutable.PriorityQueue[RDDBlockId](blocks.toSeq: _*)(Ordering.by(_.rddId))
     killTimers.getOrElseUpdate(execId, scheduleKill(new KillRunner(execId)))
-    if (queue.isEmpty) execId -> NoMoreBlocks else execId -> HasCachedBlocks
   }
 
   class KillRunner(execId: String) extends Runnable { def run(): Unit = killExecutor(execId) }
   private def scheduleKill(k: KillRunner) = scheduler.schedule(k, forceKillAfterS, TimeUnit.SECONDS)
 
-  // Ask block manager master to replicate a cached block
+  /**
+   * Ask block manager master to replicate one cached block.
+   * @param execId the executor to replicate a block from
+   * @return false if there are no more blocks or if there is an issue
+   */
   def replicateFirstBlock(execId: String): Future[Boolean] = synchronized {
     logDebug(s"saveFirstBlock $execId")
     blocksToSave.get(execId) match {
@@ -165,7 +191,7 @@ private class GracefulShutdownState(
     }
   }
 
-  private def doReplication(execId: String, blockId: RDDBlockId) = {
+  private def doReplication(execId: String, blockId: RDDBlockId): Future[Boolean] = {
     logDebug(s"saving $blockId")
     val savedBlocksForExecutor = savedBlocks.getOrElseUpdate(execId, new mutable.HashSet)
     savedBlocksForExecutor += blockId
@@ -173,16 +199,19 @@ private class GracefulShutdownState(
     blockManagerMasterEndpoint.askSync[Future[Boolean]](replicateMessage)
   }
 
-  // Ask ExecutorAllocationManager to kill executor and clean up state
-  // executorAllocationManager.killExecutors blocks. This might be a problem
-  // TODO bk make a non blocking version of kill executors
-  def killExecutor(executorId: String): Unit = synchronized {
-    logDebug(s"Sending request to kill $executorId")
-    killTimers.get(executorId).foreach(_.cancel(false))
-    killTimers -= executorId
-    blocksToSave -= executorId
-    savedBlocks -= executorId
-    executorAllocationManager.killExecutors(Seq(executorId))
+  /**
+   * Ask ExecutorAllocationManager to kill executor and clean up state
+   * Note executorAllocationManger.killExecutors is blocking, this function should be fixed
+   * to use a non blocking version
+   * @param execId the executor to kill
+   */
+  def killExecutor(execId: String): Unit = synchronized {
+    logDebug(s"Sending request to kill $execId")
+    killTimers.get(execId).foreach(_.cancel(false))
+    killTimers -= execId
+    blocksToSave -= execId
+    savedBlocks -= execId
+    executorAllocationManager.killExecutors(Seq(execId))
   }
 
   def stop(): java.util.List[Runnable] = scheduler.shutdownNow()

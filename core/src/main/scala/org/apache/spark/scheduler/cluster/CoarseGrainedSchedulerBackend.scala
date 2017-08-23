@@ -297,7 +297,6 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
         !executorsToBeKilled.contains(executorId)
     }
 
-
     // Launch tasks returned by a set of resource offers
     private def launchTasks(tasks: Seq[Seq[TaskDescription]]) {
       for (task <- tasks.flatten) {
@@ -643,7 +642,7 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
       // If we do not wish to replace the executors we kill, sync the target number of executors
       // with the cluster manager to avoid allocating new ones. When computing the new target,
       // take into account executors that are pending to be added or removed.
-      val adjustTotalExecutors =
+      val adjustTotalExecutors: Future[Boolean] =
         if (!replace) {
           requestedTotalExecutors = math.max(requestedTotalExecutors - executorsToKill.size, 0)
           if (requestedTotalExecutors !=
@@ -661,21 +660,13 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
           Future.successful(true)
         }
 
-      val killExecutors: Boolean => Future[Boolean] =
-        if (!executorsToKill.isEmpty) {
-          _ => doKillExecutors(executorsToKill)
-        } else {
-          _ => Future.successful(false)
-        }
-
       val killResponse = if (executorsToKill.nonEmpty) {
         adjustTotalExecutors.flatMap(_ => doKillExecutors(executorsToKill))(ThreadUtils.sameThread)
       } else {
         Future.successful(false)
       }
 
-      killResponse.flatMap { killSuccessful =>
-        Future.successful (if (killSuccessful) executorsToKill else Seq.empty[String])
+      killResponse.map { successful => if (successful) executorsToKill else Seq.empty
       }(ThreadUtils.sameThread)
     }
 
