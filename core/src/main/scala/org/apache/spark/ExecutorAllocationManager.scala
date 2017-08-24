@@ -422,7 +422,9 @@ private[spark] class ExecutorAllocationManager(
     logInfo("Request to remove executorIds: " + executors.mkString(", "))
     val numExistingExecs = allocationManager.executorIds.size - executorsPendingToRemove.size
     val execCountFloor = Math.max(minNumExecutors, numExecutorsTarget)
-    val (executorIdsToBeRemoved, dontRemove) = executors.splitAt(numExistingExecs - execCountFloor)
+    val (executorIdsToBeRemoved, dontRemove) = executors
+      .filter(canBeKilled)
+      .splitAt(numExistingExecs - execCountFloor)
 
     dontRemove.foreach { execId =>
       logDebug(s"Not removing idle executor $execId because it " +
