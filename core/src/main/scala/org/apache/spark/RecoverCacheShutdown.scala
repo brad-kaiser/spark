@@ -43,15 +43,17 @@ final private class RecoverCacheShutdown(
 
   /**
    * Start the recover cache shutdown process for these executors
+   *
    * @param execIds the executors to start shutting down
    */
   def startExecutorKill(execIds: Seq[String]): Unit = {
-    logDebug(s"shutdown $execIds")
+    logDebug(s"Recover cached data before shutting down executors ${execIds.mkString(", ")}.")
     checkForReplicableBlocks(execIds)
   }
 
   /**
    * Stops all thread pools
+   *
    * @return
    */
   def stop(): java.util.List[Runnable] = {
@@ -62,6 +64,7 @@ final private class RecoverCacheShutdown(
   /**
    * Get list of cached blocks from BlockManagerMaster. If there are cached blocks, replicate them,
    * otherwise kill the executors
+   *
    * @param execIds the executors to check
    */
   private def checkForReplicableBlocks(execIds: Seq[String]) = state.getBlocks(execIds).foreach {
@@ -73,14 +76,20 @@ final private class RecoverCacheShutdown(
   /**
    * Replicate one cached block on an executor. If there are more, repeat. If there are none, check
    * with the block manager master again. If there is an error, go ahead and kill executor.
+   *
    * @param execId the executor to save a block one
    */
-  private def replicateBlocks(execId: String): Unit = state.replicateFirstBlock(execId).onComplete {
-    case scala.util.Success(true) => replicateBlocks(execId)
-    case scala.util.Success(false) => checkForReplicableBlocks(Seq(execId))
-    case Failure(f) =>
-      logWarning("Error trying to replicate blocks", f)
-      state.killExecutor(execId)
+  private def replicateBlocks(execId: String): Unit = {
+    val (response, blockId) = state.replicateFirstBlock(execId)
+    response.onComplete {
+      case scala.util.Success(true) =>
+        logTrace(s"Finished replicating block ${blockId.getOrElse("unknown")} on exec $execId.")
+        replicateBlocks(execId)
+      case scala.util.Success(false) => checkForReplicableBlocks(Seq(execId))
+      case Failure(f) =>
+        logWarning(s"Error trying to replicate block ${blockId.getOrElse("unknown")}.", f)
+        state.killExecutor(execId)
+    }
   }
 }
 
@@ -121,7 +130,7 @@ final private class RecoverCacheShutdownState(
    * @return a map of executorId to its replication state.
    */
   def getBlocks(execIds: Seq[String]): Map[String, ExecutorReplicationState] = synchronized {
-    logDebug(s"getting all RDD blocks for $execIds")
+    logDebug(s"Get all RDD blocks for executors: ${execIds.mkString(", ")}.")
     execIds.map { id =>
       if (isThereEnoughMemory(id)) {
         updateBlockState(id)
@@ -183,20 +192,22 @@ final private class RecoverCacheShutdownState(
    * @param execId the executor to replicate a block from
    * @return false if there are no more blocks or if there is an issue
    */
-  def replicateFirstBlock(execId: String): Future[Boolean] = synchronized {
-    logDebug(s"saveFirstBlock $execId")
+  def replicateFirstBlock(execId: String): (Future[Boolean], Option[RDDBlockId]) = synchronized {
+    logDebug(s"Replicate block on executor $execId.")
     blocksToSave.get(execId) match {
       case Some(p) if p.nonEmpty => doReplication(execId, p.dequeue())
-      case _ => Future.successful(false)
+      case _ => (Future.successful(false), None)
     }
   }
 
-  private def doReplication(execId: String, blockId: RDDBlockId): Future[Boolean] = {
-    logDebug(s"saving $blockId")
+  private def doReplication(execId: String,
+                            blockId: RDDBlockId): (Future[Boolean], Option[RDDBlockId]) = {
     val savedBlocksForExecutor = savedBlocks.getOrElseUpdate(execId, new mutable.HashSet)
     savedBlocksForExecutor += blockId
     val replicateMessage = ReplicateOneBlock(execId, blockId, blocksToSave.keys.toSeq)
-    blockManagerMasterEndpoint.askSync[Future[Boolean]](replicateMessage)
+    logTrace(s"Started replicating block $blockId on exec $execId.")
+    val future = blockManagerMasterEndpoint.askSync[Future[Boolean]](replicateMessage)
+    (future, Some(blockId))
   }
 
   /**
@@ -206,7 +217,7 @@ final private class RecoverCacheShutdownState(
    * @param execId the executor to kill
    */
   def killExecutor(execId: String): Unit = synchronized {
-    logDebug(s"Sending request to kill $execId")
+    logDebug(s"Send request to kill executor $execId.")
     killTimers.get(execId).foreach(_.cancel(false))
     killTimers -= execId
     blocksToSave -= execId

@@ -55,7 +55,6 @@ class RecoverCachedDataSuite extends SparkFunSuite with Matchers with BeforeAndA
     val transportContext = new TransportContext(transportConf, rpcHandler)
     shuffleService = transportContext.createServer()
     conf.set("spark.shuffle.service.port", shuffleService.getPort.toString)
-
   }
 
   override def afterEach(): Unit = {
@@ -135,27 +134,4 @@ class RecoverCachedDataSuite extends SparkFunSuite with Matchers with BeforeAndA
     // So all blocks should be on one or two remaining executors
     executorIds.toSet.size shouldBe 1
   }
-
-  test("blocks spilled to disk are properly cleaned up after dynamic deallocation.") {
-    conf.set("spark.dynamicAllocation.enabled", "true")
-
-    sc = new SparkContext(conf)
-    sc.jobProgressListener.waitUntilExecutorsUp(4, 60000)
-
-    val rdd = sc.parallelize(1 to 100000, 4) // cache on all 4 executors
-      .map(_ * 4L)
-      .persist(StorageLevel.DISK_ONLY)
-
-    rdd.reduce(_ + _) shouldBe 20000200000L // realize the cache
-    getLocations(sc, rdd).foreach(println)
-
-    Thread.sleep(10000)
-
-
-
-  }
-
-  test("When node memory is limited we are intelligent about replicating data ") {}
-
-
 }
