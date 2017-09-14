@@ -76,6 +76,9 @@ package object config {
     .timeConf(TimeUnit.MILLISECONDS)
     .createWithDefaultString("3s")
 
+  private[spark] val DYN_ALLOCATION_RECOVER_CACHE =
+    ConfigBuilder("spark.dynamicAllocation.recoverCachedData").booleanConf.createWithDefault(false)
+
   private[spark] val SHUFFLE_SERVICE_ENABLED =
     ConfigBuilder("spark.shuffle.service.enabled").booleanConf.createWithDefault(false)
 

@@ -26,7 +26,7 @@ import scala.util.control.{ControlThrowable, NonFatal}
 import com.codahale.metrics.{Gauge, MetricRegistry}
 
 import org.apache.spark.internal.Logging
-import org.apache.spark.internal.config.{DYN_ALLOCATION_MAX_EXECUTORS, DYN_ALLOCATION_MIN_EXECUTORS}
+import org.apache.spark.internal.config.{DYN_ALLOCATION_MAX_EXECUTORS, DYN_ALLOCATION_MIN_EXECUTORS, DYN_ALLOCATION_RECOVER_CACHE}
 import org.apache.spark.metrics.source.Source
 import org.apache.spark.scheduler._
 import org.apache.spark.util._
@@ -111,8 +111,7 @@ private[spark] class ExecutorAllocationManager(
     "spark.dynamicAllocation.cachedExecutorIdleTimeout", s"${Integer.MAX_VALUE}s")
 
   // whether or not to try and save cached data when executors are deallocated
-  private val replicateCachedData =
-    conf.getBoolean("spark.dynamicAllocation.recoverCachedData", defaultValue = false)
+  private val recoverCachedData = conf.get(DYN_ALLOCATION_RECOVER_CACHE)
 
   // During testing, the methods to actually kill and add executors are mocked out
   private val testing = conf.getBoolean("spark.dynamicAllocation.testing", false)
@@ -427,7 +426,7 @@ private[spark] class ExecutorAllocationManager(
   private def removeExecutors(executors: Seq[String]): Unit = synchronized {
     logInfo("Request to remove executorIds: " + executors.mkString(", "))
     val numExistingExecs = allocationManager.executorIds.size - executorsPendingToRemove.size
-    val execCountFloor = Math.max(minNumExecutors, numExecutorsTarget)
+    val execCountFloor = math.max(minNumExecutors, numExecutorsTarget)
     val (executorIdsToBeRemoved, dontRemove) = executors
       .filter(canBeKilled)
       .splitAt(numExistingExecs - execCountFloor)
@@ -442,7 +441,7 @@ private[spark] class ExecutorAllocationManager(
       Seq.empty[String]
     } else if (testing) {
       recordExecutorKill(executorIdsToBeRemoved)
-    } else if (replicateCachedData) {
+    } else if (recoverCachedData) {
       logDebug(s"Starting replicate process for $executorIdsToBeRemoved")
       client.markForDeath(executorIdsToBeRemoved)
       recordExecutorKill(executorIdsToBeRemoved)
@@ -464,9 +463,9 @@ private[spark] class ExecutorAllocationManager(
   }
 
   private def recordExecutorKill(executorsRemoved: Seq[String]): Unit = synchronized {
-        // [SPARK-21834] killExecutors api reduces the target number of executors.
-        // So we need to update the target with desired value.
-        client.requestTotalExecutors(numExecutorsTarget, localityAwareTasks, hostToLocalTaskCount)
+    // [SPARK-21834] killExecutors api reduces the target number of executors.
+    // So we need to update the target with desired value.
+    client.requestTotalExecutors(numExecutorsTarget, localityAwareTasks, hostToLocalTaskCount)
     executorsPendingToRemove ++= executorsRemoved
     logInfo(s"Removing executor $executorsRemoved because it has been idle for " +
       s"$executorIdleTimeoutS seconds")
