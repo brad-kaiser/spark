@@ -24,6 +24,7 @@ import scala.concurrent.{ExecutionContext, Future}
 import scala.util.Failure
 
 import org.apache.spark.internal.Logging
+import org.apache.spark.internal.config.DYN_ALLOCATION_RECOVER_CACHE_TIMEOUT
 import org.apache.spark.rpc.RpcEndpointRef
 import org.apache.spark.storage.{BlockId, BlockManagerId, RDDBlockId}
 import org.apache.spark.storage.BlockManagerMessages.{GetCachedBlocks, GetMemoryStatus, GetSizeOfBlocks, ReplicateOneBlock}
@@ -33,13 +34,14 @@ import org.apache.spark.util.ThreadUtils
  * Responsible for asynchronously replicating all of an executors cached blocks, and then shutting
  * it down.
  */
-final private class RecoverCacheShutdown(
-    state: RecoverCacheShutdownState,
+final private class CacheRecoveryManager(
+    state: CacheRecoveryManagerState,
     conf: SparkConf)
   extends Logging {
 
   private val threadPool = ThreadUtils.newDaemonCachedThreadPool("recover-cache-shutdown-pool")
-  private implicit val asyncExecutionContext = ExecutionContext.fromExecutorService(threadPool)
+  private implicit val asyncExecutionContext: ExecutionContext =
+    ExecutionContext.fromExecutorService(threadPool)
 
   /**
    * Start the recover cache shutdown process for these executors
@@ -68,9 +70,8 @@ final private class RecoverCacheShutdown(
    * @param execIds the executors to check
    */
   private def checkForReplicableBlocks(execIds: Seq[String]) = state.getBlocks(execIds).foreach {
-    case (executorId, NoMoreBlocks) => state.killExecutor(executorId)
-    case (executorId, NotEnoughMemory) => state.killExecutor(executorId)
     case (executorId, HasCachedBlocks) => replicateBlocks(executorId)
+    case (executorId, NoMoreBlocks | NotEnoughMemory) => state.killExecutor(executorId)
   }
 
   /**
@@ -80,12 +81,14 @@ final private class RecoverCacheShutdown(
    * @param execId the executor to save a block one
    */
   private def replicateBlocks(execId: String): Unit = {
+    import scala.util.Success
     val (response, blockId) = state.replicateFirstBlock(execId)
     response.onComplete {
-      case scala.util.Success(true) =>
+      case Success(true) =>
         logTrace(s"Finished replicating block ${blockId.getOrElse("unknown")} on exec $execId.")
         replicateBlocks(execId)
-      case scala.util.Success(false) => checkForReplicableBlocks(Seq(execId))
+      case Success(false) =>
+        checkForReplicableBlocks(Seq(execId))
       case Failure(f) =>
         logWarning(s"Error trying to replicate block ${blockId.getOrElse("unknown")}.", f)
         state.killExecutor(execId)
@@ -93,39 +96,38 @@ final private class RecoverCacheShutdown(
   }
 }
 
-private object RecoverCacheShutdown {
-  def apply(eam: ExecutorAllocationManager, conf: SparkConf): RecoverCacheShutdown = {
+private object CacheRecoveryManager {
+  def apply(eam: ExecutorAllocationManager, conf: SparkConf): CacheRecoveryManager = {
     val bmme = SparkEnv.get.blockManager.master.driverEndpoint
-    val state = new RecoverCacheShutdownState(bmme, eam, conf)
-    new RecoverCacheShutdown(state, conf)
+    val state = new CacheRecoveryManagerState(bmme, eam, conf)
+    new CacheRecoveryManager(state, conf)
   }
 }
 
 /**
  * Private class that holds state for all the executors being shutdown.
+ *
  * @param blockManagerMasterEndpoint blockManagerMasterEndpoint
  * @param executorAllocationManager ExecutorAllocationManager
  * @param conf spark conf
  */
-final private class RecoverCacheShutdownState(
+final private class CacheRecoveryManagerState(
    blockManagerMasterEndpoint: RpcEndpointRef,
    executorAllocationManager: ExecutorAllocationManager,
    conf: SparkConf
  ) extends Logging {
 
-  type ExecMap[T] = mutable.Map[String, T]
-
-  private val forceKillAfterS =
-    conf.getTimeAsSeconds("spark.dynamicAllocation.recoverCachedData.timeout", "120s")
+  private val forceKillAfterS = conf.get(DYN_ALLOCATION_RECOVER_CACHE_TIMEOUT)
   private val scheduler =
     ThreadUtils.newDaemonSingleThreadScheduledExecutor("recover-cache-shutdown-timers")
 
-  private val blocksToSave: ExecMap[mutable.PriorityQueue[RDDBlockId]] = new mutable.HashMap
-  private val savedBlocks: ExecMap[mutable.HashSet[RDDBlockId]] = new mutable.HashMap
-  private val killTimers: ExecMap[ScheduledFuture[_]] = new mutable.HashMap
+    private val blocksToSave = new mutable.HashMap[String, mutable.PriorityQueue[RDDBlockId]]
+    private val savedBlocks = new mutable.HashMap[String, mutable.HashSet[RDDBlockId]]
+    private val killTimers = new mutable.HashMap[String, ScheduledFuture[_]]
 
   /**
    * Query Block Manager Master for cached blocks.
+   *
    * @param execIds the executors to query
    * @return a map of executorId to its replication state.
    */
@@ -143,8 +145,9 @@ final private class RecoverCacheShutdownState(
   }
 
   /**
-   *  Is there enough memory on the cluster to replicate the cached data on execId before we delete
-   *  it. Take into account all the blocks that are currently on track to be deleted.
+   * Is there enough memory on the cluster to replicate the cached data on execId before we delete
+   * it. Take into account all the blocks that are currently on track to be deleted.
+   *
    * @param execId the id of the executor we want to delete.
    * @return true if there is room
    */
@@ -189,6 +192,7 @@ final private class RecoverCacheShutdownState(
 
   /**
    * Ask block manager master to replicate one cached block.
+   *
    * @param execId the executor to replicate a block from
    * @return false if there are no more blocks or if there is an issue
    */
@@ -200,8 +204,9 @@ final private class RecoverCacheShutdownState(
     }
   }
 
-  private def doReplication(execId: String,
-                            blockId: RDDBlockId): (Future[Boolean], Option[RDDBlockId]) = {
+  private def doReplication(
+      execId: String,
+      blockId: RDDBlockId): (Future[Boolean], Option[RDDBlockId]) = {
     val savedBlocksForExecutor = savedBlocks.getOrElseUpdate(execId, new mutable.HashSet)
     savedBlocksForExecutor += blockId
     val replicateMessage = ReplicateOneBlock(execId, blockId, blocksToSave.keys.toSeq)
@@ -218,8 +223,7 @@ final private class RecoverCacheShutdownState(
    */
   def killExecutor(execId: String): Unit = synchronized {
     logDebug(s"Send request to kill executor $execId.")
-    killTimers.get(execId).foreach(_.cancel(false))
-    killTimers -= execId
+    killTimers.remove(execId).foreach(_.cancel(false))
     blocksToSave -= execId
     savedBlocks -= execId
     executorAllocationManager.killExecutors(Seq(execId))

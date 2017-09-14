@@ -88,7 +88,7 @@ private[spark] class ExecutorAllocationManager(
 
   import ExecutorAllocationManager._
 
-  var recoverShutdown: RecoverCacheShutdown = _
+  var cacheRecoveryManager: CacheRecoveryManager = _
 
   // Lower and upper bounds on the number of executors.
   private val minNumExecutors = conf.get(DYN_ALLOCATION_MIN_EXECUTORS)
@@ -239,14 +239,14 @@ private[spark] class ExecutorAllocationManager(
     executor.scheduleWithFixedDelay(scheduleTask, 0, intervalMillis, TimeUnit.MILLISECONDS)
 
     client.requestTotalExecutors(numExecutorsTarget, localityAwareTasks, hostToLocalTaskCount)
-    recoverShutdown = RecoverCacheShutdown(this, conf)
+    cacheRecoveryManager = CacheRecoveryManager(this, conf)
   }
 
   /**
    * Stop the allocation manager.
    */
   def stop(): Unit = {
-    recoverShutdown.stop()
+    cacheRecoveryManager.stop()
     executor.shutdown()
     executor.awaitTermination(10, TimeUnit.SECONDS)
   }
@@ -445,7 +445,7 @@ private[spark] class ExecutorAllocationManager(
       logDebug(s"Starting replicate process for $executorIdsToBeRemoved")
       client.markForDeath(executorIdsToBeRemoved)
       recordExecutorKill(executorIdsToBeRemoved)
-      recoverShutdown.startExecutorKill(executorIdsToBeRemoved)
+      cacheRecoveryManager.startExecutorKill(executorIdsToBeRemoved)
     } else {
       val killed = killExecutors(executorIdsToBeRemoved)
       recordExecutorKill(killed)

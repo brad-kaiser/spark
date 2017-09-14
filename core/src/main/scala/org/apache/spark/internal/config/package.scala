@@ -79,6 +79,11 @@ package object config {
   private[spark] val DYN_ALLOCATION_RECOVER_CACHE =
     ConfigBuilder("spark.dynamicAllocation.recoverCachedData").booleanConf.createWithDefault(false)
 
+  private[spark] val DYN_ALLOCATION_RECOVER_CACHE_TIMEOUT =
+    ConfigBuilder("spark.dynamicAllocation.recoverCachedData.timeout")
+      .timeConf(TimeUnit.SECONDS)
+      .createWithDefault(120)
+
   private[spark] val SHUFFLE_SERVICE_ENABLED =
     ConfigBuilder("spark.shuffle.service.enabled").booleanConf.createWithDefault(false)
 
