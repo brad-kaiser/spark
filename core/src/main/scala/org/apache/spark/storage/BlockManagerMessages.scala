@@ -32,8 +32,6 @@ private[spark] object BlockManagerMessages {
   // blocks that the master knows about.
   case class RemoveBlock(blockId: BlockId) extends ToBlockManagerSlave
 
-  // Replicate block excluding certain executors for graceful shutdown.
-  // Replicate blocks that were lost due to executor failure
   case class ReplicateBlock(
       blockId: BlockId,
       replicas: Seq[BlockManagerId],
@@ -126,6 +124,6 @@ private[spark] object BlockManagerMessages {
 
   case class GetSizeOfBlocks(blocks: Seq[(String, BlockId)]) extends ToBlockManagerMaster
 
-  case class ReplicateOneBlock(executorId: String, blockId: BlockId, exclude: Seq[String])
+  case class ReplicateOneBlock(executorId: String, blockId: BlockId, excluding: Seq[String])
     extends ToBlockManagerMaster
 }
