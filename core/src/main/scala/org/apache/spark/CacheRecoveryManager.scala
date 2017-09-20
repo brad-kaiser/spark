@@ -132,51 +132,63 @@ final private class CacheRecoveryManagerState(
    * @return a map of executorId to its replication state.
    */
   def getBlocks(execIds: Seq[String]): Map[String, ExecutorReplicationState] = synchronized {
-    logDebug(s"Get all RDD blocks for executors: ${execIds.mkString(", ")}.")
-    execIds.map { id =>
-      if (isThereEnoughMemory(id)) {
-        updateBlockState(id)
-        val blocksRemain = blocksToSave.get(id).exists(_.nonEmpty)
-        id -> (if (blocksRemain) HasCachedBlocks else NoMoreBlocks)
-      } else {
-        id -> NotEnoughMemory
-      }
-    }(collection.breakOut)
+    val isThereEnoughMemory = checkFreeMem(execIds)
+
+    isThereEnoughMemory.map {
+      case (execId, true) =>
+        updateBlockState(execId)
+        val blocksRemain = blocksToSave.get(execId).exists(_.nonEmpty)
+        execId -> (if (blocksRemain) HasCachedBlocks else NoMoreBlocks)
+      case (execId, false) =>
+        execId -> NotEnoughMemory
+    }
   }
 
   /**
-   * Is there enough memory on the cluster to replicate the cached data on execId before we delete
-   * it. Take into account all the blocks that are currently on track to be deleted.
+   * Checks to see if there is enough memory on the cluster to hold the cached blocks on these
+   * executors. Checks on a per executor basis from the smallest to the largest.
    *
-   * @param execId the id of the executor we want to delete.
-   * @return true if there is room
+   * @param execIds the executors to query
+   * @return a map of executor ids to whether or not there is enough free memory for them.
    */
-  private def isThereEnoughMemory(execId: String): Boolean = {
-    val currentMemStatus = blockManagerMasterEndpoint
+  private def checkFreeMem(execIds: Seq[String]): Map[String, Boolean] = {
+    val execIdsToShutDown = execIds.toSet
+    val allExecMemStatus: Map[String, (Long, Long)] = blockManagerMasterEndpoint
       .askSync[Map[BlockManagerId, (Long, Long)]](GetMemoryStatus)
       .map { case (blockManagerId, mem) => blockManagerId.executorId -> mem }
-    val remaining = currentMemStatus - execId -- blocksToSave.keys
 
-    val thisExecBytes = if (!blocksToSave.contains(execId) && currentMemStatus.contains(execId)) {
-      currentMemStatus(execId)._1 - currentMemStatus(execId)._2
-    } else {
-      0
+    val (expiringMemStatus, remainingMemStatus) = allExecMemStatus.partition {
+      case (k, v) => execIdsToShutDown.contains(k)
     }
+    val freeMemOnRemaining = remainingMemStatus.values.map(_._2).sum
 
-    remaining.nonEmpty && everyExecutorHasEnoughMemory(remaining, thisExecBytes)
+    val alreadyReplicatedBlocks: Map[String, Set[RDDBlockId]] =
+      savedBlocks.filterKeys(execIdsToShutDown).map { case (k, v) => k -> v.toSet }.toMap
+
+    val getSizes = GetSizeOfBlocks(alreadyReplicatedBlocks)
+    val alreadyReplicatedBytes = blockManagerMasterEndpoint.askSync[Map[String, Long]](getSizes)
+
+    val bytesToReplicate: Seq[(String, Long)] =
+      expiringMemStatus.map { case (execId, (maxMem, remainingMem)) =>
+        val alreadyReplicated = alreadyReplicatedBytes.getOrElse(execId, 0L)
+        val usedMem = maxMem - remainingMem
+        val toBeReplicatedMem = usedMem - alreadyReplicated
+        execId -> toBeReplicatedMem
+      }.toSeq.sortBy { case (k, v) => v }
+
+    bytesToReplicate.scan(("start", freeMemOnRemaining)) {
+      case ((_, remainingMem), (execId, mem)) => (execId, remainingMem - mem)
+    }.drop(1)
+      .toMap
+      .mapValues(freeMem => freeMem >= 0)
   }
 
-  private def everyExecutorHasEnoughMemory(execMem: Map[String, (Long, Long)], bytes: Long) = {
-    val blocksInQueueBytes = blockManagerMasterEndpoint.askSync[Long](GetSizeOfBlocks(blockList))
-    val bytesPerExec = (blocksInQueueBytes + bytes) / execMem.size.toFloat
-    execMem.forall { case (_, (_, remaining)) => remaining - bytesPerExec >= 0 }
-  }
-
-  private def blockList = for {
-    (id, queue) <- blocksToSave.toSeq
-    block <- queue
-  } yield (id, block)
-
+  /**
+   * Gets a list of cached blocks from the block manager master and updates.
+   * CacheRecoveryManagerState.
+   *
+   * @param execId an executor Id
+   */
   private def updateBlockState(execId: String): Unit = {
     val blocks: mutable.Set[RDDBlockId] = blockManagerMasterEndpoint
       .askSync[collection.Set[BlockId]](GetCachedBlocks(execId))

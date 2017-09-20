@@ -272,17 +272,15 @@ class BlockManagerMasterEndpoint(
     cachedBlocks.getOrElse(Set.empty)
   }
 
-  private def getSizeOfBlocks(blocks: Seq[(String, BlockId)]): Long = {
-    val sizes: Seq[Long] = for {
-      (executorId, blockId) <- blocks
-      blockManagerId <- blockManagerIdByExecutor.get(executorId)
-      info <- blockManagerInfo.get(blockManagerId)
-      status <- Option(info.blocks.get(blockId))
-      size = status.memSize
-    } yield size
+  private def getSizeOfBlocks(blockMap: Map[String, Set[RDDBlockId]]): Map[String, Long] = for {
+    (execId, blockSet) <- blockMap
+    blockManagerId <- blockManagerIdByExecutor.get(execId)
+    info <- blockManagerInfo.get(blockManagerId)
+    blockSizes = blockSet.flatMap(lookupBlockSize(info)).sum
+  } yield execId -> blockSizes
 
-    sizes.sum
-  }
+  private def lookupBlockSize(info: BlockManagerInfo)(blockId: RDDBlockId): Option[Long] =
+    Option(info.blocks.get(blockId)).map(status => status.memSize)
 
   /**
    * Return true if the driver knows about the given block manager. Otherwise, return false,

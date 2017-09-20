@@ -122,7 +122,7 @@ private[spark] object BlockManagerMessages {
 
   case class GetCachedBlocks(executorId: String) extends ToBlockManagerMaster
 
-  case class GetSizeOfBlocks(blocks: Seq[(String, BlockId)]) extends ToBlockManagerMaster
+  case class GetSizeOfBlocks(blocks: Map[String, Set[RDDBlockId]]) extends ToBlockManagerMaster
 
   case class ReplicateOneBlock(executorId: String, blockId: BlockId, excluding: Seq[String])
     extends ToBlockManagerMaster

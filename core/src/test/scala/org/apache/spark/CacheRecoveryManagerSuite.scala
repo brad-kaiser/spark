@@ -106,7 +106,26 @@ class CacheRecoveryManagerSuite extends SparkFunSuite with MockitoSugar with Mat
     val memStatus = Map(BlockManagerId("1", "host", 12, None) -> ((2L, 1L)),
       BlockManagerId("2", "host", 12, None) -> ((2L, 1L)),
       BlockManagerId("3", "host", 12, None) -> ((2L, 1L)),
-      BlockManagerId("4", "host", 12, None) -> ((2L, 1L)))
+      BlockManagerId("4", "host", 12, None) -> ((3L, 2L)))
+    val bmme = FakeBMM(1, blocks.iterator, memStatus)
+    val bmmeRef = DummyRef(bmme)
+    val crms = new CacheRecoveryManagerState(bmmeRef, eam, conf)
+    val cacheRecoveryManager = new CacheRecoveryManager(crms, conf)
+
+    cacheRecoveryManager.startExecutorKill(Seq("1", "2", "3"))
+    Thread.sleep(100)
+    bmme.replicated.size shouldBe 2
+    bmme.replicated.asScala.toSeq shouldBe Seq(RDDBlockId(1, 1), RDDBlockId(1, 1))
+  }
+
+  test("Blocks won't replicate if we are stopping all executors") {
+    val conf = new SparkConf()
+    val eam = mock[ExecutorAllocationManager]
+    val blocks = Seq(RDDBlockId(1, 1), RDDBlockId(1, 1), RDDBlockId(1, 1), RDDBlockId(1, 1))
+    val memStatus = Map(BlockManagerId("1", "host", 12, None) -> ((2L, 1L)),
+                         BlockManagerId("2", "host", 12, None) -> ((2L, 1L)),
+                         BlockManagerId("3", "host", 12, None) -> ((2L, 1L)),
+                         BlockManagerId("4", "host", 12, None) -> ((2L, 1L)))
     val bmme = FakeBMM(1, blocks.iterator, memStatus)
     val bmmeRef = DummyRef(bmme)
     val crms = new CacheRecoveryManagerState(bmmeRef, eam, conf)
@@ -114,8 +133,8 @@ class CacheRecoveryManagerSuite extends SparkFunSuite with MockitoSugar with Mat
 
     cacheRecoveryManager.startExecutorKill(Seq("1", "2", "3", "4"))
     Thread.sleep(100)
-    bmme.replicated.size shouldBe 2
-    bmme.replicated.asScala.toSeq shouldBe Seq(RDDBlockId(1, 1), RDDBlockId(1, 1))
+    bmme.replicated.size shouldBe 0
+    bmme.replicated.asScala.toSeq shouldBe Seq()
   }
 }
 
@@ -142,7 +161,7 @@ private case class FakeBMM(
       }
       context.reply(future)
     case GetMemoryStatus => context.reply(memStatus)
-    case GetSizeOfBlocks(bs) => context.reply(bs.size * sizeOfBlock)
+    case GetSizeOfBlocks(bs) => context.reply(bs.mapValues(blocks => blocks.size * sizeOfBlock))
   }
 }
 
