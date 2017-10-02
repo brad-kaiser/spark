@@ -61,13 +61,15 @@ private[spark] trait ExecutorAllocationClient {
    *
    * @param executorIds identifiers of executors to kill
    * @param replace whether to replace the killed executors with new ones, default false
-   * @param force whether to force kill busy executors, default false
+   * @param forceIfBusy whether to force kill busy executors, default false
+   * @param forceIfPending whether to force kill executors that are pending to die, default false
    * @return the ids of the executors acknowledged by the cluster manager to be removed.
    */
   def killExecutors(
-    executorIds: Seq[String],
-    replace: Boolean = false,
-    force: Boolean = false): Seq[String]
+      executorIds: Seq[String],
+      replace: Boolean = false,
+      forceIfBusy: Boolean = false,
+      forceIfPending: Boolean = false): Seq[String]
 
   /**
    * Request that the cluster manager kill every executor on the specified host.
@@ -89,5 +91,5 @@ private[spark] trait ExecutorAllocationClient {
    * Mark these executors as pending to be removed
    * @param executorIds Executors that will be removed and should not accept new work.
    */
-  def markForDeath(executorIds: Seq[String]): Unit
+  def markPendingToRemove(executorIds: Seq[String]): Unit
 }

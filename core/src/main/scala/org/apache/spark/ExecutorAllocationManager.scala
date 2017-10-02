@@ -443,7 +443,7 @@ private[spark] class ExecutorAllocationManager(
       recordExecutorKill(executorIdsToBeRemoved)
     } else if (recoverCachedData) {
       logDebug(s"Starting replicate process for $executorIdsToBeRemoved")
-      client.markForDeath(executorIdsToBeRemoved)
+      client.markPendingToRemove(executorIdsToBeRemoved)
       recordExecutorKill(executorIdsToBeRemoved)
       cacheRecoveryManager.startExecutorKill(executorIdsToBeRemoved)
     } else {
@@ -452,9 +452,9 @@ private[spark] class ExecutorAllocationManager(
     }
   }
 
-  def killExecutors(executorIds: Seq[String]): Seq[String] = {
+  def killExecutors(executorIds: Seq[String], forceIfPending: Boolean = false): Seq[String] = {
     logDebug(s"Starting kill process for $executorIds")
-    val result = client.killExecutors(executorIds)
+    val result = client.killExecutors(executorIds, forceIfPending = forceIfPending)
     if (result.isEmpty) {
       logWarning(s"Unable to reach the cluster manager to kill executor/s " +
         s"${executorIds.mkString(",")} or no executor eligible to kill!")

@@ -116,9 +116,7 @@ class RecoverCachedDataSuite extends SparkFunSuite with Matchers with BeforeAndA
     rdd.reduce(_ + _) shouldBe 20000200000L // realize the cache
     getLocations(sc, rdd).foreach(println)
 
-    println("XXX SLEEPING")
     Thread.sleep(1102) // sleep long enough to trigger deallocation
-    println("XXX DONE")
 
     val rdd2 = sc.parallelize(1 to 100000, 4).map(_ * 4L).cache() // should be created on 1 exe
     rdd2.reduce(_ + _) shouldBe 20000200000L

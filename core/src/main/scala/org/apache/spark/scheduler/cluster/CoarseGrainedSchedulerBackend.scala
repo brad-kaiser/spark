@@ -89,12 +89,6 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
   @GuardedBy("CoarseGrainedSchedulerBackend.this")
   private val executorsPendingToRemove = new HashMap[String, Boolean]
 
-  // Mark executors that we will request to kill in the near future.
-  // This is different from executors in executorsPendingToRemove, which have already asked to be
-  // killed.
-  @GuardedBy("CoarseGrainedSchedulerBackend.this")
-  private val executorsToBeKilled = mutable.Set.empty[String]
-
   // A map to store hostname with its possible task number running on it
   @GuardedBy("CoarseGrainedSchedulerBackend.this")
   protected var hostToLocalTaskCount: Map[String, Int] = Map.empty
@@ -164,7 +158,7 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
 
       case KillExecutorsOnHost(host) =>
         scheduler.getExecutorsAliveOnHost(host).foreach { exec =>
-          killExecutors(exec.toSeq, replace = true, force = true)
+          killExecutors(exec.toSeq, replace = true, forceIfBusy = true)
         }
     }
 
@@ -293,8 +287,7 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
 
     private def executorIsAlive(executorId: String): Boolean = synchronized {
       !executorsPendingToRemove.contains(executorId) &&
-        !executorsPendingLossReason.contains(executorId) &&
-        !executorsToBeKilled.contains(executorId)
+        !executorsPendingLossReason.contains(executorId)
     }
 
     // Launch tasks returned by a set of resource offers
@@ -337,7 +330,6 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
             addressToExecutorId -= executorInfo.executorAddress
             executorDataMap -= executorId
             executorsPendingLossReason -= executorId
-            executorsToBeKilled -= executorId
             executorsPendingToRemove.remove(executorId).getOrElse(false)
           }
           totalCoreCount.addAndGet(-executorInfo.totalCores)
@@ -451,7 +443,6 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
       requestedTotalExecutors = 0
       numPendingExecutors = 0
       executorsPendingToRemove.clear()
-      executorsToBeKilled.clear()
       executorDataMap.keys.toSet
     }
 
@@ -579,8 +570,7 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
       this.hostToLocalTaskCount = hostToLocalTaskCount
 
       numPendingExecutors =
-        math.max(numExecutors - numExistingExecutors + executorsPendingToRemove.size
-          + executorsToBeKilled.size, 0)
+        math.max(numExecutors - numExistingExecutors + executorsPendingToRemove.size, 0)
 
       doRequestTotalExecutors(numExecutors)
     }
@@ -612,13 +602,15 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
    *
    * @param executorIds identifiers of executors to kill
    * @param replace whether to replace the killed executors with new ones, default false
-   * @param force whether to force kill busy executors, default false
+   * @param forceIfBusy whether to force kill busy executors, default false
+   * @param forceIfPending whether to force kill executors that are pending to die, default false
    * @return the ids of the executors acknowledged by the cluster manager to be removed.
    */
   final override def killExecutors(
       executorIds: Seq[String],
       replace: Boolean,
-      force: Boolean): Seq[String] = {
+      forceIfBusy: Boolean,
+      forceIfPending: Boolean): Seq[String] = {
     logInfo(s"Requesting to kill executor(s) ${executorIds.mkString(", ")}")
 
     val response: Future[Seq[String]] = synchronized {
@@ -628,12 +620,9 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
       // If an executor is already pending to be removed, do not kill it again (SPARK-9795)
       // If this executor is busy, do not kill it unless we are told to force kill it (SPARK-9552)
       val executorsToKill = knownExecutors
-        .filter { id => !executorsPendingToRemove.contains(id) }
-        .filter { id => force || !scheduler.isExecutorBusy(id) }
-      executorsToKill.foreach { id =>
-        executorsPendingToRemove(id) = !replace
-        executorsToBeKilled -= id
-      }
+        .filter { id => forceIfPending || !executorsPendingToRemove.contains(id) }
+        .filter { id => forceIfBusy || !scheduler.isExecutorBusy(id) }
+      executorsToKill.foreach(id => executorsPendingToRemove(id) = !replace)
 
       logInfo(s"Actual list of executor(s) to be killed is ${executorsToKill.mkString(", ")}")
 
@@ -646,7 +635,8 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
           if (requestedTotalExecutors !=
               (numExistingExecutors + numPendingExecutors - executorsPendingToRemove.size)) {
             logDebug(
-              s"""killExecutors($executorIds, $replace, $force): Executor counts do not match:
+              s"""killExecutors($executorIds, $replace, forceIfBusy = $forceIfBusy,""" +
+                s"""forceIfPending = $forceIfPending): Executor counts do not match:
                  |requestedTotalExecutors  = $requestedTotalExecutors
                  |numExistingExecutors     = $numExistingExecutors
                  |numPendingExecutors      = $numPendingExecutors
@@ -707,9 +697,9 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
     }
   }
 
-  override def markForDeath(executorIds: Seq[String]): Unit = synchronized {
-    logDebug(s"marking $executorIds for death")
-    executorsToBeKilled ++= executorIds
+  override def markPendingToRemove(executorIds: Seq[String]): Unit = synchronized {
+    logDebug(s"marking $executorIds pending to remove")
+    executorIds.foreach(id => executorsPendingToRemove.put(id, true))
   }
 }
 

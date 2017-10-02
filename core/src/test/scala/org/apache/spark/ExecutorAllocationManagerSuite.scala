@@ -1262,7 +1262,8 @@ private class DummyLocalSchedulerBackend (sc: SparkContext, sb: SchedulerBackend
   override def killExecutors(
       executorIds: Seq[String],
       replace: Boolean,
-      force: Boolean): Seq[String] = {
+      forceIfBusy: Boolean,
+      forceIfPending: Boolean): Seq[String] = {
     val response = sc.killExecutors(executorIds)
     if (response) {
       executorIds
@@ -1283,5 +1284,5 @@ private class DummyLocalSchedulerBackend (sc: SparkContext, sb: SchedulerBackend
     false
   }
 
-  override def markForDeath(executorIds: Seq[String]): Unit = Seq.empty
+  override def markPendingToRemove(executorIds: Seq[String]): Unit = Seq.empty
 }

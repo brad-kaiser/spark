@@ -238,7 +238,7 @@ final private class CacheRecoveryManagerState(
     killTimers.remove(execId).foreach(_.cancel(false))
     blocksToSave -= execId
     savedBlocks -= execId
-    executorAllocationManager.killExecutors(Seq(execId))
+    executorAllocationManager.killExecutors(Seq(execId), forceIfPending = true)
   }
 
   def stop(): java.util.List[Runnable] = scheduler.shutdownNow()

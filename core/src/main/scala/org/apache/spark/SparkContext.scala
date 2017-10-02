@@ -1645,7 +1645,7 @@ class SparkContext(config: SparkConf) extends Logging {
   def killExecutors(executorIds: Seq[String]): Boolean = {
     schedulerBackend match {
       case b: CoarseGrainedSchedulerBackend =>
-        b.killExecutors(executorIds, replace = false, force = true).nonEmpty
+        b.killExecutors(executorIds, replace = false, forceIfBusy = true).nonEmpty
       case _ =>
         logWarning("Killing executors is only supported in coarse-grained mode")
         false
@@ -1683,7 +1683,7 @@ class SparkContext(config: SparkConf) extends Logging {
   private[spark] def killAndReplaceExecutor(executorId: String): Boolean = {
     schedulerBackend match {
       case b: CoarseGrainedSchedulerBackend =>
-        b.killExecutors(Seq(executorId), replace = true, force = true).nonEmpty
+        b.killExecutors(Seq(executorId), replace = true, forceIfBusy = true).nonEmpty
       case _ =>
         logWarning("Killing executors is only supported in coarse-grained mode")
         false
