@@ -126,7 +126,7 @@ class BlockManagerMasterEndpoint(
 
     case ReplicateOneBlock(execId, blockId, exclude) =>
       logDebug(s"Replicating first block on $execId")
-      context.reply(replicateOneBlock(execId, blockId, exclude))
+      replicateOneBlock(execId, blockId, exclude, context)
 
     case StopBlockManagerMaster =>
       context.reply(true)
@@ -249,7 +249,8 @@ class BlockManagerMasterEndpoint(
   private def replicateOneBlock(
       execId: String,
       blockId: BlockId,
-      excludeExecutors: Seq[String]): Future[Boolean] = {
+      excludeExecutors: Seq[String],
+      context: RpcCallContext): Unit = {
     logDebug(s"replicating block $blockId")
     val excluded = excludeExecutors.flatMap(blockManagerIdByExecutor.get)
     val response: Option[Future[Boolean]] = for {
@@ -260,7 +261,7 @@ class BlockManagerMasterEndpoint(
       maxReps = replicaSet.size + 2
     } yield info.slaveEndpoint.ask[Boolean](ReplicateBlock(blockId, replicas, excluded, maxReps))
 
-    response.getOrElse(Future.successful(false))
+    response.getOrElse(Future.successful(false)).foreach(context.reply)
   }
 
   private def getCachedBlocks(executorId: String): collection.Set[BlockId] = {

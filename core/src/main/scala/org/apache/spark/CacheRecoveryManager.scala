@@ -223,7 +223,7 @@ final private class CacheRecoveryManagerState(
     savedBlocksForExecutor += blockId
     val replicateMessage = ReplicateOneBlock(execId, blockId, blocksToSave.keys.toSeq)
     logTrace(s"Started replicating block $blockId on exec $execId.")
-    val future = blockManagerMasterEndpoint.askSync[Future[Boolean]](replicateMessage)
+    val future = blockManagerMasterEndpoint.ask[Boolean](replicateMessage)
     (future, Some(blockId))
   }
 

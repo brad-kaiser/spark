@@ -20,8 +20,8 @@ package org.apache.spark
 import java.util.concurrent.ConcurrentLinkedQueue
 
 import scala.collection.JavaConverters._
+import scala.concurrent.{Future, Promise}
 import scala.concurrent.ExecutionContext.Implicits.global
-import scala.concurrent.Future
 import scala.reflect.ClassTag
 
 import org.mockito.Mockito._
@@ -66,7 +66,7 @@ class CacheRecoveryManagerSuite extends SparkFunSuite with MockitoSugar with Mat
 
     cacheRecoveryManager.startExecutorKill(Seq("1"))
     Thread.sleep(1010)
-    verify(eam, times(1)).killExecutors(Seq("1"))
+    verify(eam, times(1)).killExecutors(Seq("1"), forceIfPending = true)
     bmme.replicated.size shouldBe 1
   }
 
@@ -81,7 +81,8 @@ class CacheRecoveryManagerSuite extends SparkFunSuite with MockitoSugar with Mat
 
     cacheRecoveryManager.startExecutorKill(Seq("1"))
     Thread.sleep(1100)
-    verify(eam, times(1)).killExecutors(Seq("1")) // should be killed once not twice
+    // should be killed once not twice
+    verify(eam, times(1)).killExecutors(Seq("1"), forceIfPending = true)
   }
 
   test("Blocks don't get replicated more than once") {
@@ -159,7 +160,7 @@ private case class FakeBMM(
         replicated.add(blockId)
         true
       }
-      context.reply(future)
+      future.foreach(context.reply)
     case GetMemoryStatus => context.reply(memStatus)
     case GetSizeOfBlocks(bs) => context.reply(bs.mapValues(blocks => blocks.size * sizeOfBlock))
   }
@@ -173,14 +174,15 @@ private case class DummyRef(endpoint: RpcEndpoint) extends RpcEndpointRef(new Sp
   def ask[T: ClassTag](message: Any, timeout: RpcTimeout): Future[T] = {
     val context = new DummyRpcCallContext[T]
     endpoint.receiveAndReply(context)(message)
-    Future.successful(context.result)
+    context.result
   }
 }
 
 // saves values you put in context.reply
 private class DummyRpcCallContext[T] extends RpcCallContext {
-  var result: T = _
-  def reply(response: Any): Unit = result = response.asInstanceOf[T]
+  val promise: Promise[T] = Promise[T]()
+  def result: Future[T] = promise.future
+  def reply(response: Any): Unit = promise.success(response.asInstanceOf[T])
   def sendFailure(e: Throwable): Unit = ()
   def senderAddress: RpcAddress = null
 }
