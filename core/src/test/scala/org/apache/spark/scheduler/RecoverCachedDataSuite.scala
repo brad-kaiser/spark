@@ -72,7 +72,6 @@ class RecoverCachedDataSuite extends SparkFunSuite with Matchers with BeforeAndA
     }(breakOut)
   }
 
-  // scalastyle:off println
   test("cached data is replicated before dynamic de-allocation") {
     sc = new SparkContext(conf)
     sc.jobProgressListener.waitUntilExecutorsUp(4, 60000)
@@ -80,12 +79,10 @@ class RecoverCachedDataSuite extends SparkFunSuite with Matchers with BeforeAndA
     val rdd = sc.parallelize(1 to 1000, 4).map(_ * 4).cache()
     rdd.reduce(_ + _) shouldBe 2002000
     sc.getExecutorIds().size shouldBe 4
-    getLocations(sc, rdd).foreach(println)
     getLocations(sc, rdd).forall{ case (id, map) => map.nonEmpty } shouldBe true
 
     Thread.sleep(3000)
     sc.getExecutorIds().size shouldBe 3
-    getLocations(sc, rdd).foreach(println)
     getLocations(sc, rdd).forall{ case (id, map) => map.nonEmpty } shouldBe true
   }
 
@@ -97,12 +94,10 @@ class RecoverCachedDataSuite extends SparkFunSuite with Matchers with BeforeAndA
     val rdd = sc.parallelize(1 to 1000, 4).map(_ * 4).cache()
     rdd.reduce(_ + _) shouldBe 2002000
     sc.getExecutorIds().size shouldBe 4
-    getLocations(sc, rdd).foreach(println)
     getLocations(sc, rdd).forall{ case (id, map) => map.nonEmpty } shouldBe true
 
     Thread.sleep(3000)
     sc.getExecutorIds().size shouldBe 1
-    getLocations(sc, rdd).foreach(println)
     getLocations(sc, rdd).forall{ case (id, map) => map.nonEmpty } shouldBe true
   }
 
@@ -114,7 +109,6 @@ class RecoverCachedDataSuite extends SparkFunSuite with Matchers with BeforeAndA
 
     val rdd = sc.parallelize(1 to 100000, 4).map(_ * 4L).cache() // cache on all 4 executors
     rdd.reduce(_ + _) shouldBe 20000200000L // realize the cache
-    getLocations(sc, rdd).foreach(println)
 
     Thread.sleep(1102) // sleep long enough to trigger deallocation
 
@@ -125,8 +119,6 @@ class RecoverCachedDataSuite extends SparkFunSuite with Matchers with BeforeAndA
       maps <- getLocations(sc, rdd2).values
       blockManagerId <- maps.keys
     } yield blockManagerId.executorId
-
-    executorIds.foreach(println)
 
     // sometimes the ExecutorAllocationManager only shuts down 2 executors not 3
     // So all blocks should be on one or two remaining executors
