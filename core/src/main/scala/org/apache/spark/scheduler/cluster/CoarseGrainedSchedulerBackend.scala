@@ -622,7 +622,7 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
       val executorsToKill = knownExecutors
         .filter { id => forceIfPending || !executorsPendingToRemove.contains(id) }
         .filter { id => forceIfBusy || !scheduler.isExecutorBusy(id) }
-      executorsToKill.foreach(id => executorsPendingToRemove(id) = !replace)
+      executorsToKill.foreach { id => executorsPendingToRemove(id) = !replace }
 
       logInfo(s"Actual list of executor(s) to be killed is ${executorsToKill.mkString(", ")}")
 
@@ -654,7 +654,8 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
         Future.successful(false)
       }
 
-      killResponse.map { successful => if (successful) executorsToKill else Seq.empty
+      killResponse.map { successful =>
+        if (successful) executorsToKill else Seq.empty
       }(ThreadUtils.sameThread)
     }
 
@@ -699,7 +700,7 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
 
   override def markPendingToRemove(executorIds: Seq[String]): Unit = synchronized {
     logDebug(s"marking $executorIds pending to remove")
-    executorIds.foreach(id => executorsPendingToRemove.put(id, true))
+    executorIds.foreach { id => executorsPendingToRemove.put(id, true) }
   }
 }
 

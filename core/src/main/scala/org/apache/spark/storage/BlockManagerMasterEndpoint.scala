@@ -97,9 +97,11 @@ class BlockManagerMasterEndpoint(
     case GetStorageStatus =>
       context.reply(storageStatus)
 
-    case GetCachedBlocks(executorId) => context.reply(getCachedBlocks(executorId))
+    case GetCachedBlocks(executorId) =>
+      context.reply(getCachedBlocks(executorId))
 
-    case GetSizeOfBlocks(blocks) => context.reply(getSizeOfBlocks(blocks))
+    case GetSizeOfBlocks(blocks) =>
+      context.reply(getSizeOfBlocks(blocks))
 
     case GetBlockStatus(blockId, askSlaves) =>
       context.reply(blockStatus(blockId, askSlaves))
@@ -258,6 +260,8 @@ class BlockManagerMasterEndpoint(
       info <- blockManagerInfo.get(blockManagerId)
       replicaSet <- blockLocations.asScala.get(blockId)
       replicas = replicaSet.toSeq
+      // Add 2 below because you need the number of replicas, plus one for the original, plus one
+      // for the new replica.
       maxReps = replicaSet.size + 2
     } yield info.slaveEndpoint.ask[Boolean](ReplicateBlock(blockId, replicas, excluded, maxReps))
 

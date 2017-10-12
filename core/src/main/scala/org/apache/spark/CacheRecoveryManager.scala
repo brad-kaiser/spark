@@ -21,17 +21,18 @@ import java.util.concurrent.{ScheduledFuture, TimeUnit}
 
 import scala.collection.mutable
 import scala.concurrent.{ExecutionContext, Future}
+import scala.util.{Success => Succ}
 import scala.util.Failure
 
 import org.apache.spark.internal.Logging
-import org.apache.spark.internal.config.DYN_ALLOCATION_RECOVER_CACHE_TIMEOUT
+import org.apache.spark.internal.config.DYN_ALLOCATION_CACHE_RECOVERY_TIMEOUT
 import org.apache.spark.rpc.RpcEndpointRef
 import org.apache.spark.storage.{BlockId, BlockManagerId, RDDBlockId}
 import org.apache.spark.storage.BlockManagerMessages.{GetCachedBlocks, GetMemoryStatus, GetSizeOfBlocks, ReplicateOneBlock}
 import org.apache.spark.util.ThreadUtils
 
 /**
- * Responsible for asynchronously replicating all of an executors cached blocks, and then shutting
+ * Responsible for asynchronously replicating all of an executor's cached blocks, and then shutting
  * it down.
  */
 final private class CacheRecoveryManager(
@@ -39,7 +40,7 @@ final private class CacheRecoveryManager(
     conf: SparkConf)
   extends Logging {
 
-  private val threadPool = ThreadUtils.newDaemonCachedThreadPool("recover-cache-shutdown-pool")
+  private val threadPool = ThreadUtils.newDaemonCachedThreadPool("cache-recovery-manager-pool")
   private implicit val asyncExecutionContext: ExecutionContext =
     ExecutionContext.fromExecutorService(threadPool)
 
@@ -48,7 +49,7 @@ final private class CacheRecoveryManager(
    *
    * @param execIds the executors to start shutting down
    */
-  def startExecutorKill(execIds: Seq[String]): Unit = {
+  def startCacheRecovery(execIds: Seq[String]): Unit = {
     logDebug(s"Recover cached data before shutting down executors ${execIds.mkString(", ")}.")
     checkForReplicableBlocks(execIds)
   }
@@ -58,21 +59,22 @@ final private class CacheRecoveryManager(
    *
    * @return
    */
-  def stop(): java.util.List[Runnable] = {
+  def stop(): Unit = {
     threadPool.shutdownNow()
     state.stop()
   }
 
   /**
-   * Get list of cached blocks from BlockManagerMaster. If there are cached blocks, replicate them,
-   * otherwise kill the executors
+   * Check BlockManagerMaster for cached blocks on these executors. If there are cached blocks,
+   * replicate them, otherwise kill the executors
    *
    * @param execIds the executors to check
    */
-  private def checkForReplicableBlocks(execIds: Seq[String]) = state.getBlocks(execIds).foreach {
-    case (executorId, HasCachedBlocks) => replicateBlocks(executorId)
-    case (executorId, NoMoreBlocks | NotEnoughMemory) => state.killExecutor(executorId)
-  }
+  private def checkForReplicableBlocks(execIds: Seq[String]): Unit =
+    state.getBlocks(execIds).foreach {
+      case (executorId, HasCachedBlocks) => replicateBlocks(executorId)
+      case (executorId, NoMoreBlocks | NotEnoughMemory) => state.killExecutor(executorId)
+    }
 
   /**
    * Replicate one cached block on an executor. If there are more, repeat. If there are none, check
@@ -81,16 +83,15 @@ final private class CacheRecoveryManager(
    * @param execId the executor to save a block one
    */
   private def replicateBlocks(execId: String): Unit = {
-    import scala.util.Success
-    val (response, blockId) = state.replicateFirstBlock(execId)
+    val response = state.replicateFirstBlock(execId)
     response.onComplete {
-      case Success(true) =>
-        logTrace(s"Finished replicating block ${blockId.getOrElse("unknown")} on exec $execId.")
+      case Succ(Some(blockId)) =>
+        logTrace(s"Finished replicating block $blockId on executor $execId.")
         replicateBlocks(execId)
-      case Success(false) =>
+      case Succ(None) =>
         checkForReplicableBlocks(Seq(execId))
       case Failure(f) =>
-        logWarning(s"Error trying to replicate block ${blockId.getOrElse("unknown")}.", f)
+        logWarning(s"Error trying to replicate block.", f)
         state.killExecutor(execId)
     }
   }
@@ -112,18 +113,18 @@ private object CacheRecoveryManager {
  * @param conf spark conf
  */
 final private class CacheRecoveryManagerState(
-   blockManagerMasterEndpoint: RpcEndpointRef,
-   executorAllocationManager: ExecutorAllocationManager,
-   conf: SparkConf
- ) extends Logging {
+    blockManagerMasterEndpoint: RpcEndpointRef,
+    executorAllocationManager: ExecutorAllocationManager,
+    conf: SparkConf
+) extends Logging {
 
-  private val forceKillAfterS = conf.get(DYN_ALLOCATION_RECOVER_CACHE_TIMEOUT)
+  private val forceKillAfterS = conf.get(DYN_ALLOCATION_CACHE_RECOVERY_TIMEOUT)
   private val scheduler =
-    ThreadUtils.newDaemonSingleThreadScheduledExecutor("recover-cache-shutdown-timers")
+    ThreadUtils.newDaemonSingleThreadScheduledExecutor("cache-recovery-shutdown-timers")
 
-    private val blocksToSave = new mutable.HashMap[String, mutable.PriorityQueue[RDDBlockId]]
-    private val savedBlocks = new mutable.HashMap[String, mutable.HashSet[RDDBlockId]]
-    private val killTimers = new mutable.HashMap[String, ScheduledFuture[_]]
+  private val blocksToSave = new mutable.HashMap[String, mutable.PriorityQueue[RDDBlockId]]
+  private val savedBlocks = new mutable.HashMap[String, mutable.HashSet[RDDBlockId]]
+  private val killTimers = new mutable.HashMap[String, ScheduledFuture[_]]
 
   /**
    * Query Block Manager Master for cached blocks.
@@ -145,8 +146,8 @@ final private class CacheRecoveryManagerState(
   }
 
   /**
-   * Checks to see if there is enough memory on the cluster to hold the cached blocks on these
-   * executors. Checks on a per executor basis from the smallest to the largest.
+   * Checks to see if there is enough memory in the remaining executors to hold the cached blocks
+   * on the given executors. Checks on a per executor basis from the smallest to the largest.
    *
    * @param execIds the executors to query
    * @return a map of executor ids to whether or not there is enough free memory for them.
@@ -174,18 +175,19 @@ final private class CacheRecoveryManagerState(
         val usedMem = maxMem - remainingMem
         val toBeReplicatedMem = usedMem - alreadyReplicated
         execId -> toBeReplicatedMem
-      }.toSeq.sortBy { case (k, v) => v }
+      }.toSeq.sortBy { case (_, v) => v }
 
-    bytesToReplicate.scan(("start", freeMemOnRemaining)) {
-      case ((_, remainingMem), (execId, mem)) => (execId, remainingMem - mem)
-    }.drop(1)
+    bytesToReplicate
+      .scan(("start", freeMemOnRemaining)) {
+        case ((_, remainingMem), (execId, mem)) => (execId, remainingMem - mem)
+      }
+      .drop(1)
       .toMap
-      .mapValues(freeMem => freeMem >= 0)
+      .map { case (k, freeMem) => (k, freeMem > 0) }
   }
 
   /**
-   * Gets a list of cached blocks from the block manager master and updates.
-   * CacheRecoveryManagerState.
+   * Updates the internal state to track the blocks from the given executor that need recovery.
    *
    * @param execId an executor Id
    */
@@ -194,43 +196,50 @@ final private class CacheRecoveryManagerState(
       .askSync[collection.Set[BlockId]](GetCachedBlocks(execId))
       .flatMap(_.asRDDId)(collection.breakOut)
 
-    blocks --= savedBlocks.getOrElse(execId, new mutable.HashSet)
+    savedBlocks.get(execId).foreach(s => blocks --= s)
     blocksToSave(execId) = mutable.PriorityQueue[RDDBlockId](blocks.toSeq: _*)(Ordering.by(_.rddId))
     killTimers.getOrElseUpdate(execId, scheduleKill(new KillRunner(execId)))
   }
 
-  class KillRunner(execId: String) extends Runnable { def run(): Unit = killExecutor(execId) }
-  private def scheduleKill(k: KillRunner) = scheduler.schedule(k, forceKillAfterS, TimeUnit.SECONDS)
+  private def scheduleKill(k: KillRunner): ScheduledFuture[_] =
+    scheduler.schedule(k, forceKillAfterS, TimeUnit.SECONDS)
+
+  class KillRunner(execId: String) extends Runnable {
+    def run(): Unit = {
+      logDebug(s"Killing $execId because timeout for recovering cached data has expired")
+      killExecutor(execId)
+    }
+  }
 
   /**
    * Ask block manager master to replicate one cached block.
    *
    * @param execId the executor to replicate a block from
-   * @return false if there are no more blocks or if there is an issue
+   * @return a tuple of a future boolean of the result of the replication, and an option of the
+   *         block id that was going to be replicated.
    */
-  def replicateFirstBlock(execId: String): (Future[Boolean], Option[RDDBlockId]) = synchronized {
+  def replicateFirstBlock(execId: String): Future[Option[RDDBlockId]] = synchronized {
     logDebug(s"Replicate block on executor $execId.")
     blocksToSave.get(execId) match {
       case Some(p) if p.nonEmpty => doReplication(execId, p.dequeue())
-      case _ => (Future.successful(false), None)
+      case _ => Future.successful(None)
     }
   }
 
-  private def doReplication(
-      execId: String,
-      blockId: RDDBlockId): (Future[Boolean], Option[RDDBlockId]) = {
+  private def doReplication( execId: String, blockId: RDDBlockId): Future[Option[RDDBlockId]] = {
     val savedBlocksForExecutor = savedBlocks.getOrElseUpdate(execId, new mutable.HashSet)
     savedBlocksForExecutor += blockId
     val replicateMessage = ReplicateOneBlock(execId, blockId, blocksToSave.keys.toSeq)
     logTrace(s"Started replicating block $blockId on exec $execId.")
-    val future = blockManagerMasterEndpoint.ask[Boolean](replicateMessage)
-    (future, Some(blockId))
+    val response = blockManagerMasterEndpoint.ask[Boolean](replicateMessage)
+    response.map(succeeded => if (succeeded) Option(blockId) else None)
   }
 
   /**
    * Ask ExecutorAllocationManager to kill executor and clean up state
    * Note executorAllocationManger.killExecutors is blocking, this function should be fixed
    * to use a non blocking version
+   *
    * @param execId the executor to kill
    */
   def killExecutor(execId: String): Unit = synchronized {
@@ -241,7 +250,7 @@ final private class CacheRecoveryManagerState(
     executorAllocationManager.killExecutors(Seq(execId), forceIfPending = true)
   }
 
-  def stop(): java.util.List[Runnable] = scheduler.shutdownNow()
+  def stop(): Unit = scheduler.shutdownNow()
 }
 
 private sealed trait ExecutorReplicationState

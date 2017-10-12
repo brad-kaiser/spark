@@ -26,7 +26,7 @@ import scala.util.control.{ControlThrowable, NonFatal}
 import com.codahale.metrics.{Gauge, MetricRegistry}
 
 import org.apache.spark.internal.Logging
-import org.apache.spark.internal.config.{DYN_ALLOCATION_MAX_EXECUTORS, DYN_ALLOCATION_MIN_EXECUTORS, DYN_ALLOCATION_RECOVER_CACHE}
+import org.apache.spark.internal.config.{DYN_ALLOCATION_MAX_EXECUTORS, DYN_ALLOCATION_MIN_EXECUTORS, DYN_ALLOCATION_CACHE_RECOVERY}
 import org.apache.spark.metrics.source.Source
 import org.apache.spark.scheduler._
 import org.apache.spark.util._
@@ -88,7 +88,7 @@ private[spark] class ExecutorAllocationManager(
 
   import ExecutorAllocationManager._
 
-  var cacheRecoveryManager: CacheRecoveryManager = _
+  private var cacheRecoveryManager: CacheRecoveryManager = _
 
   // Lower and upper bounds on the number of executors.
   private val minNumExecutors = conf.get(DYN_ALLOCATION_MIN_EXECUTORS)
@@ -111,7 +111,7 @@ private[spark] class ExecutorAllocationManager(
     "spark.dynamicAllocation.cachedExecutorIdleTimeout", s"${Integer.MAX_VALUE}s")
 
   // whether or not to try and save cached data when executors are deallocated
-  private val recoverCachedData = conf.get(DYN_ALLOCATION_RECOVER_CACHE)
+  private val recoverCachedData = conf.get(DYN_ALLOCATION_CACHE_RECOVERY)
 
   // During testing, the methods to actually kill and add executors are mocked out
   private val testing = conf.getBoolean("spark.dynamicAllocation.testing", false)
@@ -239,7 +239,10 @@ private[spark] class ExecutorAllocationManager(
     executor.scheduleWithFixedDelay(scheduleTask, 0, intervalMillis, TimeUnit.MILLISECONDS)
 
     client.requestTotalExecutors(numExecutorsTarget, localityAwareTasks, hostToLocalTaskCount)
-    cacheRecoveryManager = CacheRecoveryManager(this, conf)
+
+    if(recoverCachedData) {
+      cacheRecoveryManager = CacheRecoveryManager(this, conf)
+    }
   }
 
   /**
@@ -431,10 +434,12 @@ private[spark] class ExecutorAllocationManager(
       .filter(canBeKilled)
       .splitAt(numExistingExecs - execCountFloor)
 
-    dontRemove.foreach { execId =>
-      logDebug(s"Not removing idle executor $execId because it " +
-        s"would put us below the minimum limit of $minNumExecutors executors" +
-        s"or number of target executors $numExecutorsTarget")
+    if (log.isDebugEnabled()) {
+      dontRemove.foreach { execId =>
+        logDebug(s"Not removing idle executor $execId because it " +
+          s"would put us below the minimum limit of $minNumExecutors executors" +
+          s"or number of target executors $numExecutorsTarget")
+      }
     }
 
     if (executorIdsToBeRemoved.isEmpty) {
@@ -445,7 +450,7 @@ private[spark] class ExecutorAllocationManager(
       logDebug(s"Starting replicate process for $executorIdsToBeRemoved")
       client.markPendingToRemove(executorIdsToBeRemoved)
       recordExecutorKill(executorIdsToBeRemoved)
-      cacheRecoveryManager.startExecutorKill(executorIdsToBeRemoved)
+      cacheRecoveryManager.startCacheRecovery(executorIdsToBeRemoved)
     } else {
       val killed = killExecutors(executorIdsToBeRemoved)
       recordExecutorKill(killed)
@@ -467,8 +472,8 @@ private[spark] class ExecutorAllocationManager(
     // So we need to update the target with desired value.
     client.requestTotalExecutors(numExecutorsTarget, localityAwareTasks, hostToLocalTaskCount)
     executorsPendingToRemove ++= executorsRemoved
-    logInfo(s"Removing executor $executorsRemoved because it has been idle for " +
-      s"$executorIdleTimeoutS seconds")
+    logInfo(s"Removing executor/s (${executorsRemoved.mkString(", ")}) because it has been idle" +
+      s"for $executorIdleTimeoutS seconds")
   }
 
   /**

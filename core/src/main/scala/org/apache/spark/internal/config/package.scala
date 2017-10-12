@@ -76,11 +76,13 @@ package object config {
     .timeConf(TimeUnit.MILLISECONDS)
     .createWithDefaultString("3s")
 
-  private[spark] val DYN_ALLOCATION_RECOVER_CACHE =
-    ConfigBuilder("spark.dynamicAllocation.recoverCachedData").booleanConf.createWithDefault(false)
+  private[spark] val DYN_ALLOCATION_CACHE_RECOVERY =
+    ConfigBuilder("spark.dynamicAllocation.cacheRecovery.enabled")
+      .booleanConf
+      .createWithDefault(false)
 
-  private[spark] val DYN_ALLOCATION_RECOVER_CACHE_TIMEOUT =
-    ConfigBuilder("spark.dynamicAllocation.recoverCachedData.timeout")
+  private[spark] val DYN_ALLOCATION_CACHE_RECOVERY_TIMEOUT =
+    ConfigBuilder("spark.dynamicAllocation.cacheRecovery.timeout")
       .timeConf(TimeUnit.SECONDS)
       .createWithDefault(120)
 
