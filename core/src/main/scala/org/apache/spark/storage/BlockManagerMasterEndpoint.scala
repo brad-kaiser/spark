@@ -268,11 +268,11 @@ class BlockManagerMasterEndpoint(
     response.getOrElse(Future.successful(false)).foreach(context.reply)
   }
 
-  private def getCachedBlocks(executorId: String): collection.Set[BlockId] = {
+  private def getCachedBlocks(executorId: String): Set[BlockId] = {
     val cachedBlocks = for {
       blockManagerId <- blockManagerIdByExecutor.get(executorId)
       info <- blockManagerInfo.get(blockManagerId)
-    } yield info.cachedBlocks
+    } yield info.cachedBlocks.toSet
 
     cachedBlocks.getOrElse(Set.empty)
   }

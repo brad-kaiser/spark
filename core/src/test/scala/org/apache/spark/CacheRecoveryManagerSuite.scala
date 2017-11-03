@@ -49,7 +49,7 @@ class CacheRecoveryManagerSuite extends SparkFunSuite with MockitoSugar with Mat
 
     when(eam.killExecutors(Seq("1"))).thenReturn(Seq("1"))
 
-    cacheRecoveryManager.startExecutorKill(Seq("1"))
+    cacheRecoveryManager.startCacheRecovery(Seq("1"))
     Thread.sleep(1000)
     verify(eam).killExecutors(Seq("1"))
     bmme.replicated.asScala.toSeq shouldBe blocks
@@ -64,7 +64,7 @@ class CacheRecoveryManagerSuite extends SparkFunSuite with MockitoSugar with Mat
     val crms = new CacheRecoveryManagerState(bmmeRef, eam, conf)
     val cacheRecoveryManager = new CacheRecoveryManager(crms, conf)
 
-    cacheRecoveryManager.startExecutorKill(Seq("1"))
+    cacheRecoveryManager.startCacheRecovery(Seq("1"))
     Thread.sleep(1010)
     verify(eam, times(1)).killExecutors(Seq("1"), forceIfPending = true)
     bmme.replicated.size shouldBe 1
@@ -79,7 +79,7 @@ class CacheRecoveryManagerSuite extends SparkFunSuite with MockitoSugar with Mat
     val crms = new CacheRecoveryManagerState(bmmeRef, eam, conf)
     val cacheRecoveryManager = new CacheRecoveryManager(crms, conf)
 
-    cacheRecoveryManager.startExecutorKill(Seq("1"))
+    cacheRecoveryManager.startCacheRecovery(Seq("1"))
     Thread.sleep(1100)
     // should be killed once not twice
     verify(eam, times(1)).killExecutors(Seq("1"), forceIfPending = true)
@@ -94,7 +94,7 @@ class CacheRecoveryManagerSuite extends SparkFunSuite with MockitoSugar with Mat
     val crms = new CacheRecoveryManagerState(bmmeRef, eam, conf)
     val cacheRecoveryManager = new CacheRecoveryManager(crms, conf)
 
-    cacheRecoveryManager.startExecutorKill(Seq("1"))
+    cacheRecoveryManager.startCacheRecovery(Seq("1"))
     Thread.sleep(100)
     bmme.replicated.size shouldBe 1
     bmme.replicated.asScala.toSeq shouldBe Seq(RDDBlockId(1, 1))
@@ -113,7 +113,7 @@ class CacheRecoveryManagerSuite extends SparkFunSuite with MockitoSugar with Mat
     val crms = new CacheRecoveryManagerState(bmmeRef, eam, conf)
     val cacheRecoveryManager = new CacheRecoveryManager(crms, conf)
 
-    cacheRecoveryManager.startExecutorKill(Seq("1", "2", "3"))
+    cacheRecoveryManager.startCacheRecovery(Seq("1", "2", "3"))
     Thread.sleep(100)
     bmme.replicated.size shouldBe 2
     bmme.replicated.asScala.toSeq shouldBe Seq(RDDBlockId(1, 1), RDDBlockId(1, 1))
@@ -132,7 +132,7 @@ class CacheRecoveryManagerSuite extends SparkFunSuite with MockitoSugar with Mat
     val crms = new CacheRecoveryManagerState(bmmeRef, eam, conf)
     val cacheRecoveryManager = new CacheRecoveryManager(crms, conf)
 
-    cacheRecoveryManager.startExecutorKill(Seq("1", "2", "3", "4"))
+    cacheRecoveryManager.startCacheRecovery(Seq("1", "2", "3", "4"))
     Thread.sleep(100)
     bmme.replicated.size shouldBe 0
     bmme.replicated.asScala.toSeq shouldBe Seq()

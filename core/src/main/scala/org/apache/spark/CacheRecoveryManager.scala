@@ -193,7 +193,7 @@ final private class CacheRecoveryManagerState(
    */
   private def updateBlockState(execId: String): Unit = {
     val blocks: mutable.Set[RDDBlockId] = blockManagerMasterEndpoint
-      .askSync[collection.Set[BlockId]](GetCachedBlocks(execId))
+      .askSync[Set[BlockId]](GetCachedBlocks(execId))
       .flatMap(_.asRDDId)(collection.breakOut)
 
     savedBlocks.get(execId).foreach(s => blocks --= s)
@@ -230,9 +230,9 @@ final private class CacheRecoveryManagerState(
     val savedBlocksForExecutor = savedBlocks.getOrElseUpdate(execId, new mutable.HashSet)
     savedBlocksForExecutor += blockId
     val replicateMessage = ReplicateOneBlock(execId, blockId, blocksToSave.keys.toSeq)
-    logTrace(s"Started replicating block $blockId on exec $execId.")
+    logTrace(s"Started replicating block $blockId on executor $execId.")
     val response = blockManagerMasterEndpoint.ask[Boolean](replicateMessage)
-    response.map(succeeded => if (succeeded) Option(blockId) else None)
+    response.map { succeeded => if (succeeded) Option(blockId) else None }(ThreadUtils.sameThread)
   }
 
   /**

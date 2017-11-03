@@ -26,7 +26,7 @@ import scala.util.control.{ControlThrowable, NonFatal}
 import com.codahale.metrics.{Gauge, MetricRegistry}
 
 import org.apache.spark.internal.Logging
-import org.apache.spark.internal.config.{DYN_ALLOCATION_MAX_EXECUTORS, DYN_ALLOCATION_MIN_EXECUTORS, DYN_ALLOCATION_CACHE_RECOVERY}
+import org.apache.spark.internal.config.{DYN_ALLOCATION_CACHE_RECOVERY, DYN_ALLOCATION_MAX_EXECUTORS, DYN_ALLOCATION_MIN_EXECUTORS}
 import org.apache.spark.metrics.source.Source
 import org.apache.spark.scheduler._
 import org.apache.spark.util._
@@ -249,7 +249,9 @@ private[spark] class ExecutorAllocationManager(
    * Stop the allocation manager.
    */
   def stop(): Unit = {
-    cacheRecoveryManager.stop()
+    if (cacheRecoveryManager != null) {
+      cacheRecoveryManager.stop()
+    }
     executor.shutdown()
     executor.awaitTermination(10, TimeUnit.SECONDS)
   }
@@ -447,7 +449,7 @@ private[spark] class ExecutorAllocationManager(
     } else if (testing) {
       recordExecutorKill(executorIdsToBeRemoved)
     } else if (recoverCachedData) {
-      logDebug(s"Starting replicate process for $executorIdsToBeRemoved")
+      logDebug(s"Starting replicate process for ${executorIdsToBeRemoved.mkString(", ")}")
       client.markPendingToRemove(executorIdsToBeRemoved)
       recordExecutorKill(executorIdsToBeRemoved)
       cacheRecoveryManager.startCacheRecovery(executorIdsToBeRemoved)
@@ -458,7 +460,7 @@ private[spark] class ExecutorAllocationManager(
   }
 
   def killExecutors(executorIds: Seq[String], forceIfPending: Boolean = false): Seq[String] = {
-    logDebug(s"Starting kill process for $executorIds")
+    logDebug(s"Starting kill process for ${executorIds.mkString(", ")}")
     val result = client.killExecutors(executorIds, forceIfPending = forceIfPending)
     if (result.isEmpty) {
       logWarning(s"Unable to reach the cluster manager to kill executor/s " +
