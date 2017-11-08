@@ -56,7 +56,7 @@ class CacheRecoveryManagerSuite extends SparkFunSuite with MockitoSugar with Mat
   }
 
   test("GracefulShutdown will kill executor if it takes too long to replicate") {
-    val conf = new SparkConf().set("spark.dynamicAllocation.recoverCachedData.timeout", "1s")
+    val conf = new SparkConf().set("spark.dynamicAllocation.cacheRecovery.timeout", "1s")
     val eam = mock[ExecutorAllocationManager]
     val blocks = Set(RDDBlockId(1, 1), RDDBlockId(2, 1), RDDBlockId(3, 1), RDDBlockId(4, 1))
     val bmme = FakeBMM(600, blocks.iterator, plentyOfMem)
@@ -71,7 +71,7 @@ class CacheRecoveryManagerSuite extends SparkFunSuite with MockitoSugar with Mat
   }
 
   test("shutdown timer will get cancelled if replication finishes") {
-    val conf = new SparkConf().set("spark.dynamicAllocation.recoverCachedData.timeout", "1s")
+    val conf = new SparkConf().set("spark.dynamicAllocation.cacheRecovery.timeout", "1s")
     val eam = mock[ExecutorAllocationManager]
     val blocks = Set(RDDBlockId(1, 1))
     val bmme = FakeBMM(1, blocks.iterator, plentyOfMem)
@@ -107,7 +107,7 @@ class CacheRecoveryManagerSuite extends SparkFunSuite with MockitoSugar with Mat
     val memStatus = Map(BlockManagerId("1", "host", 12, None) -> ((2L, 1L)),
       BlockManagerId("2", "host", 12, None) -> ((2L, 1L)),
       BlockManagerId("3", "host", 12, None) -> ((2L, 1L)),
-      BlockManagerId("4", "host", 12, None) -> ((3L, 2L)))
+      BlockManagerId("4", "host", 12, None) -> ((3L, 3L)))
     val bmme = FakeBMM(1, blocks.iterator, memStatus)
     val bmmeRef = DummyRef(bmme)
     val crms = new CacheRecoveryManagerState(bmmeRef, eam, conf)
@@ -115,7 +115,7 @@ class CacheRecoveryManagerSuite extends SparkFunSuite with MockitoSugar with Mat
 
     cacheRecoveryManager.startCacheRecovery(Seq("1", "2", "3"))
     Thread.sleep(100)
-    bmme.replicated.size shouldBe 2
+    bmme.replicated.size shouldBe  2
     bmme.replicated.asScala.toSeq shouldBe Seq(RDDBlockId(1, 1), RDDBlockId(1, 1))
   }
 

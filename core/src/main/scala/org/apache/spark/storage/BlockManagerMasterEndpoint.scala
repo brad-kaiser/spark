@@ -150,6 +150,7 @@ class BlockManagerMasterEndpoint(
       }
   }
 
+  // TODO bk clean up my logs here
   private def removeRdd(rddId: Int): Future[Seq[Int]] = {
     // First remove the metadata for the given RDD, and then asynchronously remove the blocks
     // from the slaves.
@@ -157,6 +158,7 @@ class BlockManagerMasterEndpoint(
     // Find all blocks for the given RDD, remove the block from both blockLocations and
     // the blockManagerInfo that is tracking the blocks.
     val blocks = blockLocations.asScala.keys.flatMap(_.asRDDId).filter(_.rddId == rddId)
+
     blocks.foreach { blockId =>
       val bms: mutable.HashSet[BlockManagerId] = blockLocations.get(blockId)
       bms.foreach(bm => blockManagerInfo.get(bm).foreach(_.removeBlock(blockId)))
@@ -166,8 +168,11 @@ class BlockManagerMasterEndpoint(
     // Ask the slaves to remove the RDD, and put the result in a sequence of Futures.
     // The dispatcher is used as an implicit argument into the Future sequence construction.
     val removeMsg = RemoveRdd(rddId)
+    logWarning(s" bk removing rdd $rddId")
+    logWarning(s"bk on block managers ${blockManagerInfo.keys.mkString(", ")}")
     Future.sequence(
       blockManagerInfo.values.map { bm =>
+        logWarning(s"bk in removeRDD sending message to ${bm.blockManagerId}")
         bm.slaveEndpoint.ask[Int](removeMsg)
       }.toSeq
     )
