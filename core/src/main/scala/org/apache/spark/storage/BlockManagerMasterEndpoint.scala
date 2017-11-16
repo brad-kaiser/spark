@@ -122,6 +122,9 @@ class BlockManagerMasterEndpoint(
       removeBlockFromWorkers(blockId)
       context.reply(true)
 
+    case RemoveBlockFromExecutor(blockId, executorId) =>
+      removeBlockFromExec(blockId, executorId, context)
+
     case RemoveExecutor(execId) =>
       removeExecutor(execId)
       context.reply(true)
@@ -174,6 +177,7 @@ class BlockManagerMasterEndpoint(
       blockManagerInfo.values.map { bm =>
         logWarning(s"bk in removeRDD sending message to ${bm.blockManagerId}")
         bm.slaveEndpoint.ask[Int](removeMsg)
+          .andThen{ case _ => logWarning(s"bk done removeRDD for $rddId on ${bm.blockManagerId}") }
       }.toSeq
     )
   }
@@ -320,6 +324,24 @@ class BlockManagerMasterEndpoint(
         }
       }
     }
+  }
+
+  private def removeBlockFromExec(blockId: BlockId, execId: String, ctx: RpcCallContext): Unit = {
+    def doRemove(
+        bmId: BlockManagerId,
+        bmInfo: BlockManagerInfo,
+        locations: mutable.HashSet[BlockManagerId]) = {
+      locations -= bmId
+      bmInfo.slaveEndpoint.ask[Boolean](RemoveBlock(blockId))
+    }
+
+    val response: Option[Future[Boolean]] = for {
+      blockManagerId <- blockManagerIdByExecutor.get(execId)
+      blockManagerInfo <- blockManagerInfo.get(blockManagerId)
+      locations <- Option(blockLocations.get(blockId))
+    } yield doRemove(blockManagerId, blockManagerInfo, locations)
+
+    response.getOrElse(Future.successful(false)).foreach(ctx.reply)
   }
 
   // Return a map from the block manager id to max memory and remaining memory.

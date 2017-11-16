@@ -49,9 +49,11 @@ class BlockManagerSlaveEndpoint(
       }
 
     case RemoveRdd(rddId) =>
-      doAsync[Int]("removing RDD " + rddId, context) {
+//      doAsync[Int]("removing RDD " + rddId, context) {
+        logWarning(s"bk removing RDD $rddId")
         blockManager.removeRdd(rddId)
-      }
+        logWarning(s"bk done removing RDD $rddId")
+//      }
 
     case RemoveShuffle(shuffleId) =>
       doAsync[Boolean]("removing shuffle " + shuffleId, context) {
@@ -76,8 +78,10 @@ class BlockManagerSlaveEndpoint(
       context.reply(Utils.getThreadDump())
 
     case ReplicateBlock(blockId, replicas, excluding, maxReplicas) =>
-      blockManager.replicateBlock(blockId, replicas.toSet, excluding.toSet, maxReplicas)
-      context.reply(true)
+      doAsync[Boolean](s"replicating block ${blockId.name}", context) {
+        blockManager.replicateBlock(blockId, replicas.toSet, excluding.toSet, maxReplicas)
+        true
+      }
   }
 
   private def doAsync[T](actionMessage: String, context: RpcCallContext)(body: => T) {

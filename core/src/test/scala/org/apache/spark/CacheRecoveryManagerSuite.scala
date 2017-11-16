@@ -30,7 +30,7 @@ import org.scalatest.mock.MockitoSugar
 
 import org.apache.spark.rpc._
 import org.apache.spark.storage.{BlockId, BlockManagerId, RDDBlockId}
-import org.apache.spark.storage.BlockManagerMessages.{GetCachedBlocks, GetMemoryStatus, GetSizeOfBlocks, ReplicateOneBlock}
+import org.apache.spark.storage.BlockManagerMessages._
 
 class CacheRecoveryManagerSuite extends SparkFunSuite with MockitoSugar with Matchers {
   val oneGB = 1024L * 1024L * 1024L * 1024L
@@ -161,6 +161,7 @@ private case class FakeBMM(
         true
       }
       future.foreach(context.reply)
+    case RemoveBlockFromExecutor(blockId, execId) => context.reply(true)
     case GetMemoryStatus => context.reply(memStatus)
     case GetSizeOfBlocks(bs) => context.reply(bs.mapValues(blocks => blocks.size * sizeOfBlock))
   }

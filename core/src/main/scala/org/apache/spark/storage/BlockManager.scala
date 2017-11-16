@@ -1446,7 +1446,9 @@ private[spark] class BlockManager(
     // TODO: Avoid a linear scan by creating another mapping of RDD.id to blocks.
     logInfo(s"Removing RDD $rddId")
     val blocksToRemove = blockInfoManager.entries.flatMap(_._1.asRDDId).filter(_.rddId == rddId)
+    logWarning(s"bk removing blocks $blocksToRemove")
     blocksToRemove.foreach { blockId => removeBlock(blockId, tellMaster = false) }
+    logWarning(s"bk done removing blocks $blocksToRemove")
     blocksToRemove.size
   }
 

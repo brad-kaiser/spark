@@ -28,7 +28,7 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.internal.config.DYN_ALLOCATION_CACHE_RECOVERY_TIMEOUT
 import org.apache.spark.rpc.RpcEndpointRef
 import org.apache.spark.storage.{BlockId, BlockManagerId, RDDBlockId}
-import org.apache.spark.storage.BlockManagerMessages.{GetCachedBlocks, GetMemoryStatus, GetSizeOfBlocks, ReplicateOneBlock}
+import org.apache.spark.storage.BlockManagerMessages._
 import org.apache.spark.util.ThreadUtils
 
 /**
@@ -229,10 +229,17 @@ final private class CacheRecoveryManagerState(
   private def doReplication( execId: String, blockId: RDDBlockId): Future[Option[RDDBlockId]] = {
     val savedBlocksForExecutor = savedBlocks.getOrElseUpdate(execId, new mutable.HashSet)
     savedBlocksForExecutor += blockId
-    val replicateMessage = ReplicateOneBlock(execId, blockId, blocksToSave.keys.toSeq)
+    val replicateMsg = ReplicateOneBlock(execId, blockId, blocksToSave.keys.toSeq)
+    val removeMsg = RemoveBlockFromExecutor(blockId, execId)
     logTrace(s"Started replicating block $blockId on executor $execId.")
-    val response = blockManagerMasterEndpoint.ask[Boolean](replicateMessage)
-    response.map { succeeded => if (succeeded) Option(blockId) else None }(ThreadUtils.sameThread)
+    blockManagerMasterEndpoint
+      .ask[Boolean](replicateMsg)
+      .flatMap { _ =>
+        logWarning(s"bk done replicating block $blockId on executor $execId")
+        blockManagerMasterEndpoint.ask[Boolean](removeMsg) }(ThreadUtils.sameThread)
+      .map { succeeded =>
+        logWarning(s"bk done removing block $blockId on executor $execId ")
+        if (succeeded) Option(blockId) else None }(ThreadUtils.sameThread)
   }
 
   /**

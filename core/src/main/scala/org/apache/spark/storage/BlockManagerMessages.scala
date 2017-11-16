@@ -126,4 +126,7 @@ private[spark] object BlockManagerMessages {
 
   case class ReplicateOneBlock(executorId: String, blockId: BlockId, excluding: Seq[String])
     extends ToBlockManagerMaster
+
+  case class RemoveBlockFromExecutor(blockId: BlockId, executorId: String)
+    extends ToBlockManagerMaster
 }
